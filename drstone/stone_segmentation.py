@@ -173,8 +173,12 @@ def list_stones(series_dir: str, max_stones: int = 6) -> list:
             if m[cz, cy, cx]:
                 loc = nm
                 break
+        # Max axis-aligned caliper (mm) for the size-based acute decision.
+        dmax = max((zz.max() - zz.min() + 1) * spacing[0],
+                   (yy.max() - yy.min() + 1) * spacing[1],
+                   (xx.max() - xx.min() + 1) * spacing[2])
         out.append({"peak_hu": float(hu.max()), "mean_hu": float(hu.mean()),
                     "p95_hu": float(np.percentile(hu, 95)), "volume_mm3": float(vol),
-                    "location": loc})
+                    "max_diameter_mm": float(dmax), "location": loc})
     out.sort(key=lambda s: -s["volume_mm3"])
     return out[:max_stones]

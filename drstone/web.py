@@ -1,5 +1,6 @@
-"""Dr Stone point-of-care front-end: uric-acid stone probability from a
-non-contrast CT (stone HU) + routine ED labs. Decision support only."""
+"""Dr Stone point-of-care front-end: stone-composition probability distribution
++ acute management (MET vs. intervention) + tailored prevention, from a
+non-contrast CT (stone HU/size/location) + routine ED labs. Decision support only."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from drstone import config as C
-from drstone.predict import predict
+from drstone.predict import predict, compose_assess
 
 router = APIRouter()
 
@@ -26,7 +27,7 @@ FRIENDLY = {
 
 PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dr Stone — Uric-Acid Stone Probability</title>
+<title>Dr Stone — Stone Composition &amp; Management</title>
 <script src="/static/js/vendor/htmx.min.js"></script>
 <style>
  body{margin:0;font-family:system-ui,sans-serif;background:#0e1217;color:#e8edf2}
@@ -44,7 +45,7 @@ PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
  .disclaimer{font-size:11px;color:#6b7d8f;margin-top:18px;line-height:1.5}
 </style></head><body><div class="wrap">
 <h1>Dr&nbsp;Stone</h1>
-<div class="sub">Uric-acid stone probability from a non-contrast stone-protocol CT and routine labs — no dual-energy CT required. Decision support, not a substitute for stone analysis.</div>
+<div class="sub">Stone composition probabilities + acute management (pass vs. treat) + tailored prevention, from a non-contrast stone-protocol CT and routine ED labs — no dual-energy CT required. Decision support / patient education, not a substitute for stone analysis or urology consultation.</div>
 <form hx-post="/api/drstone/predict" hx-target="#result" hx-swap="innerHTML">
  <div class="card"><h3>Patient lookup (research)</h3>
    <div style="display:flex;gap:8px">
@@ -67,7 +68,11 @@ PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
    <div class="grid">
    <div><label>Stone peak HU</label><input name="hu_peak" type="number" step="1" placeholder="e.g. 640"></div>
    <div><label>Stone mean HU</label><input name="hu_mean" type="number" step="1" placeholder="e.g. 350"></div>
- </div></div>
+   <div><label>Stone size (max mm)</label><input name="stone_size_mm" type="number" step="0.1" placeholder="e.g. 7"></div>
+   <div><label>Location</label><select name="location"><option value="">—</option><option>Renal</option><option>Ureteral</option><option>Bladder</option></select></div>
+ </div>
+ <input type="hidden" name="hu_p95"><input type="hidden" name="volume_mm3">
+ </div>
  <div class="card"><h3>Labs &amp; demographics (leave unknown blank)</h3><div class="grid">
    <div><label>Urine pH</label><input name="urine_ph" type="number" step="0.1" placeholder="5.0-9.0"></div>
    <div><label>Sodium</label><input name="na" type="number" step="1" placeholder="mmol/L"></div>
@@ -81,17 +86,27 @@ PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
    <div><label>Sex</label><select name="sex"><option value="">—</option><option>Male</option><option>Female</option></select></div>
  </div>
  <div class="hint">Anion gap is computed from Na, Cl and CO₂. The model tolerates missing labs.</div>
- <button type="submit">Estimate UA probability</button></div>
+ <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:#e8b9b9;cursor:pointer">
+   <input type="checkbox" name="infection" value="on" style="width:auto;margin:0">
+   Suspected infection / obstruction (fever, pyuria, ↑WBC) — flag urologic emergency
+ </label>
+ <button type="submit">Assess stone &amp; recommend</button></div>
 </form>
 <div id="result"></div>
-<div class="disclaimer">For research/decision-support use. Single-energy CT cannot reliably separate calcium-oxalate from calcium-phosphate; this tool targets the actionable uric-acid vs non-uric-acid distinction. Confirm composition with stone analysis when available.</div>
+<div class="disclaimer">For research/decision-support use; not a substitute for stone analysis, a 24-hour urine metabolic evaluation, or urology consultation. Single-energy CT cannot reliably separate calcium-oxalate from calcium-phosphate — read the composition output as a ranked probability distribution and confirm with stone analysis when available. Acute and prevention guidance is draft content pending clinician sign-off.</div>
 </div>
 <script>
 function fmtVol(mm3){ return mm3>=1000 ? (mm3/1000).toFixed(1)+' cm³' : Math.round(mm3)+' mm³'; }
+function setVal(name,v){ var el=document.getElementsByName(name)[0]; if(el) el.value=v; }
+function mapLoc(loc){ loc=(loc||'').toLowerCase();
+  if(loc.indexOf('bladder')>=0) return 'Bladder';
+  if(loc.indexOf('kidney')>=0) return 'Renal';
+  return 'Ureteral'; }
 function pickStone(idx, stones){
   var s=stones[idx];
-  document.getElementsByName('hu_peak')[0].value=Math.round(s.peak_hu);
-  document.getElementsByName('hu_mean')[0].value=Math.round(s.mean_hu);
+  setVal('hu_peak',Math.round(s.peak_hu)); setVal('hu_mean',Math.round(s.mean_hu));
+  setVal('hu_p95',Math.round(s.p95_hu||s.peak_hu)); setVal('volume_mm3',Math.round(s.volume_mm3));
+  setVal('stone_size_mm',(s.max_diameter_mm||0).toFixed(1)); setVal('location',mapLoc(s.location));
   var rows=document.querySelectorAll('.stone-opt');
   for(var i=0;i<rows.length;i++){ rows[i].style.borderColor = (i==idx)?'#2f855a':'#2c3e52'; rows[i].style.background=(i==idx)?'#16241b':'#0e1217'; }
   document.getElementById('measure-status').style.color='#2f855a';
@@ -177,57 +192,99 @@ async def drstone_measure(request: Request):
         return JSONResponse({"found": False, "error": str(e)}, status_code=500)
 
 
+TYPE_META = {
+    "CaOx":     ("Calcium oxalate",     "#2c7fb8"),
+    "CaP":      ("Calcium phosphate",   "#41a7c4"),
+    "UA":       ("Uric acid",           "#d9852f"),
+    "Struvite": ("Struvite (infection)", "#8e6fc4"),
+    "Other":    ("Other / uncommon",    "#7a8a99"),
+}
+TIER_COLOR = {"met": "#2f855a", "surveillance": "#3a6ea5",
+              "intervention": "#c05621", "info": "#8295a7"}
+
+
+def _li(items):
+    return "".join(f"<li>{html.escape(x)}</li>" for x in items)
+
+
 @router.post("/api/drstone/predict", response_class=HTMLResponse)
 async def drstone_predict(request: Request):
     form = dict(await request.form())
     try:
-        r = predict(form)
+        r = compose_assess(form)
     except Exception as e:
         return HTMLResponse(f'<div class="card" style="border-color:#a33">Error: {html.escape(str(e))}</div>')
-    p = r["probability"]; prev = r["prevalence"]
-    pct = p * 100
-    # Probabilities are compressed at this prevalence/AUC; interpret RELATIVE to
-    # the population baseline and the high-sensitivity rule-out threshold. The
-    # model's primary clinical value is ranking + ruling UA out (high NPV).
-    if p < 0.02:
-        band, color, msg = ("Uric acid effectively EXCLUDED", "#2f855a",
-            "Very low probability — a low score reliably rules out uric acid (high negative predictive value). Proceed with standard (non-UA) management.")
-    elif p < prev:
-        band, color, msg = ("Uric acid LESS LIKELY than average", "#38a169",
-            f"Below the population baseline ({prev*100:.0f}%). Uric acid is less likely than the average stone patient.")
-    elif p < 2 * prev:
-        band, color, msg = ("At / above average", "#b7791f",
-            f"At or above the population baseline ({prev*100:.0f}%). Consider urine pH trend and clinical context; stone analysis if retrieved.")
-    else:
-        band, color, msg = ("Uric acid ELEVATED", "#c05621",
-            "Well above baseline — consider a urine alkalinization trial and metabolic work-up; many uric-acid stones are medically dissolvable.")
 
-    rows = ""
-    for c in r["contributions"][:6]:
-        if c["value"] != c["value"]:        # NaN -> not provided
-            continue
-        toward = c["shap"] > 0
-        arrow = "▲ toward UA" if toward else "▼ away from UA"
-        col = "#e06c75" if toward else "#61afef"
-        val = c["value"]
-        vals = f"{val:.1f}" if abs(val) < 1000 else f"{val:.0f}"
-        rows += (f'<tr><td>{html.escape(FRIENDLY.get(c["feature"], c["feature"]))}</td>'
-                 f'<td style="text-align:right">{vals}</td>'
-                 f'<td style="color:{col}">{arrow}</td></tr>')
+    # ---- composition distribution bars ---------------------------------
+    bars = ""
+    for d in r["distribution"]:
+        label, col = TYPE_META.get(d["type"], (d["type"], "#7a8a99"))
+        pct = d["p"] * 100
+        bars += (
+            f'<div style="margin:7px 0">'
+            f'<div style="display:flex;justify-content:space-between;font-size:13px;color:#c3d0dc">'
+            f'<span>{html.escape(label)}</span><span style="font-weight:600;color:{col}">{pct:.0f}%</span></div>'
+            f'<div style="background:#0e1217;border-radius:5px;height:12px;overflow:hidden;border:1px solid #2c3e52;margin-top:2px">'
+            f'<div style="width:{min(100,pct):.0f}%;height:100%;background:{col}"></div></div></div>')
+    top_labels = ", ".join(TYPE_META.get(t, (t, ""))[0] for t in r["top"])
 
-    auc_txt = f"{r['auc']:.2f}" if r['auc'] == r['auc'] else "—"
+    # ---- acute panel ---------------------------------------------------
+    ac = r["acute"]
+    acol = TIER_COLOR.get(ac["tier"], "#8295a7")
+    redflags = ""
+    if ac["redflags"]:
+        redflags = ('<div style="background:#2a1416;border:1px solid #a33;border-radius:6px;'
+                    'padding:9px 11px;margin:8px 0">'
+                    '<div style="color:#ff7b7b;font-weight:700;font-size:13px">⚠ Red flags</div>'
+                    f'<ul style="margin:5px 0 0;padding-left:18px;color:#f0c0c0;font-size:13px;line-height:1.5">{_li(ac["redflags"])}</ul></div>')
+    acute_details = (f'<ul style="margin:6px 0 0;padding-left:18px;color:#c3d0dc;font-size:13px;line-height:1.55">{_li(ac["details"])}</ul>'
+                     if ac["details"] else "")
+
+    # ---- prevention panel ----------------------------------------------
+    prev = r["prevention"]
+    blocks = ""
+    for b in prev["blocks"]:
+        _, col = TYPE_META.get(b["type"], (b["label"], "#7a8a99"))
+        blocks += (
+            f'<div style="border:1px solid #2c3e52;border-left:4px solid {col};border-radius:6px;padding:9px 12px;margin:8px 0;background:#11161c">'
+            f'<div style="font-weight:600;color:{col};margin-bottom:4px">{html.escape(b["label"])}</div>'
+            f'<div style="font-size:12px;color:#8fa6bd;margin-top:6px;text-transform:uppercase;letter-spacing:.04em">Diet</div>'
+            f'<ul style="margin:3px 0 0;padding-left:18px;font-size:13px;color:#c3d0dc;line-height:1.5">{_li(b["diet"])}</ul>'
+            f'<div style="font-size:12px;color:#8fa6bd;margin-top:6px;text-transform:uppercase;letter-spacing:.04em">Medication</div>'
+            f'<ul style="margin:3px 0 0;padding-left:18px;font-size:13px;color:#c3d0dc;line-height:1.5">{_li(b["meds"])}</ul>'
+            f'<div style="font-size:12px;color:#8fa6bd;margin-top:6px;text-transform:uppercase;letter-spacing:.04em">Lifestyle</div>'
+            f'<ul style="margin:3px 0 0;padding-left:18px;font-size:13px;color:#c3d0dc;line-height:1.5">{_li(b["lifestyle"])}</ul>'
+            f'</div>')
+    flags = ""
+    if prev["flags"]:
+        flags = ('<div style="background:#16202a;border:1px solid #2c4a63;border-radius:6px;padding:9px 11px;margin:8px 0">'
+                 '<div style="color:#8fd0ff;font-weight:600;font-size:13px">Metabolic flags (spot labs)</div>'
+                 f'<ul style="margin:5px 0 0;padding-left:18px;color:#c3d0dc;font-size:13px;line-height:1.5">{_li(prev["flags"])}</ul></div>')
+
     return HTMLResponse(f"""
+<div class="card" style="border:1px dashed #b7791f;background:#1a1710">
+  <div style="font-size:12px;color:#e0b15a;line-height:1.5">⚠ {html.escape(r["draft"])}</div>
+</div>
+
 <div class="card">
-  <h3>Estimated uric-acid probability</h3>
-  <div style="font-size:34px;font-weight:700;color:{color}">{pct:.0f}%</div>
-  <div style="background:#0e1217;border-radius:6px;height:14px;margin:8px 0;overflow:hidden;border:1px solid #2c3e52">
-    <div style="width:{min(100,pct):.0f}%;height:100%;background:{color}"></div></div>
-  <div style="font-weight:600;color:{color};margin:6px 0">{band}</div>
-  <div style="font-size:13px;color:#c3d0dc;line-height:1.5">{msg}</div>
-  <div style="font-size:12px;color:#8295a7;margin-top:8px">Population baseline ≈ {prev*100:.0f}% · model AUROC {auc_txt} (95% CI 0.68–0.87) · {r['n_provided']}/{r['n_features']} inputs provided</div>
-  <h3 style="margin-top:16px">Why (per-case drivers)</h3>
-  <table style="width:100%;border-collapse:collapse;font-size:13px">
-    <thead><tr style="color:#8fa6bd"><th style="text-align:left">Feature</th><th style="text-align:right">Value</th><th style="text-align:left;padding-left:14px">Effect</th></tr></thead>
-    <tbody>{rows or '<tr><td colspan=3 style="color:#8295a7">enter values above</td></tr>'}</tbody>
-  </table>
+  <h3>Likely stone composition</h3>
+  <div style="font-size:12px;color:#8295a7;margin-bottom:6px">Probability distribution from CT stone density + routine labs ({r['n_provided']} inputs). Single-energy CT cannot fully separate calcium subtypes — read as a ranked distribution, confirm with stone analysis.</div>
+  {bars}
+  <div style="font-size:13px;color:#c3d0dc;margin-top:10px">Most likely: <b>{html.escape(top_labels)}</b></div>
+</div>
+
+<div class="card" style="border-left:4px solid {acol}">
+  <h3 style="color:{acol}">Acute management</h3>
+  {redflags}
+  <div style="font-weight:600;color:#e7eef5;font-size:15px;line-height:1.4">{html.escape(ac["headline"])}</div>
+  {acute_details}
+</div>
+
+<div class="card">
+  <h3>Prevention &amp; patient education</h3>
+  <div style="font-size:13px;color:#c3d0dc;line-height:1.5">{html.escape(prev["universal"])}</div>
+  {flags}
+  {blocks}
+  <div style="font-size:13px;color:#a9c2d8;background:#11161c;border:1px solid #2c3e52;border-radius:6px;padding:9px 11px;margin-top:8px;line-height:1.5">{html.escape(prev["workup"])}</div>
+  <div style="font-size:11px;color:#6f8296;margin-top:8px">Sources: {html.escape(prev["cite"])}</div>
 </div>""")

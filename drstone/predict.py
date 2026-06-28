@@ -44,6 +44,51 @@ def _num(v):
         return np.nan
 
 
+_COMPOSE = None
+
+
+def _load_compose():
+    global _COMPOSE
+    if _COMPOSE is None:
+        import joblib
+        _COMPOSE = joblib.load(os.path.join(C.MODEL_DIR, "drstone_compose_model.pkl"))
+    return _COMPOSE
+
+
+def compose_assess(form: dict) -> dict:
+    """Full assessment: composition distribution + acute (MET vs surgery) +
+    prevention guidance. Inputs are routine ED data; missing values tolerated."""
+    from drstone.recommendations import acute, prevention, DRAFT_NOTICE
+    b = _load_compose()
+    feats, classes = b["features"], b["classes"]
+    na, cl, co2 = _num(form.get("na")), _num(form.get("cl")), _num(form.get("co2"))
+    sex = str(form.get("sex", "")).strip().upper()
+    gender_m = 1.0 if sex.startswith("M") else (0.0 if sex.startswith("F") else np.nan)
+    labs = {k: _num(form.get(k)) for k in
+            ("urine_ph", "na", "k", "cl", "co2", "bun", "creatinine", "ca", "glucose")}
+    vals = {
+        "hu_peak": _num(form.get("hu_peak")), "hu_mean": _num(form.get("hu_mean")),
+        "hu_p95": _num(form.get("hu_p95")), "volume_mm3": _num(form.get("volume_mm3")),
+        "urine_ph": labs["urine_ph"], "na": na, "k": _num(form.get("k")), "cl": cl, "co2": co2,
+        "anion_gap": (na - cl - co2) if not any(np.isnan([na, cl, co2])) else np.nan,
+        "bun": labs["bun"], "creatinine": labs["creatinine"], "ca": labs["ca"],
+        "glucose": labs["glucose"], "age": _num(form.get("age")), "gender_M": gender_m,
+    }
+    X = pd.DataFrame([[vals.get(f, np.nan) for f in feats]], columns=feats)
+    proba = b["model"].predict_proba(X)[0]
+    dist = sorted([{"type": c, "p": float(p)} for c, p in zip(classes, proba)],
+                  key=lambda d: -d["p"])
+    top = [d["type"] for d in dist[:2] if d["p"] >= 0.15] or [dist[0]["type"]]
+    diam = _num(form.get("stone_size_mm"))
+    ac = acute(diameter_mm=(None if (isinstance(diam, float) and np.isnan(diam)) else diam),
+               location=form.get("location", ""), creatinine=labs["creatinine"],
+               infection=str(form.get("infection", "")).lower() in ("1", "true", "yes", "on"))
+    return {"distribution": dist, "top": top, "acute": ac,
+            "prevention": prevention(top, labs), "draft": DRAFT_NOTICE,
+            "n_provided": int(sum(1 for v in vals.values()
+                                  if not (isinstance(v, float) and np.isnan(v))))}
+
+
 def predict(form: dict) -> dict:
     """form: raw clinical inputs (hu_peak, hu_mean, urine_ph, na, cl, co2, bun,
     creatinine, ca, glucose, age, sex). Missing values are allowed."""
