@@ -46,6 +46,14 @@ PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <h1>Dr&nbsp;Stone</h1>
 <div class="sub">Uric-acid stone probability from a non-contrast stone-protocol CT and routine labs — no dual-energy CT required. Decision support, not a substitute for stone analysis.</div>
 <form hx-post="/api/drstone/predict" hx-target="#result" hx-swap="innerHTML">
+ <div class="card"><h3>Patient lookup (research)</h3>
+   <div style="display:flex;gap:8px">
+     <input name="mrn" type="text" placeholder="UT MRN" style="flex:1">
+     <button type="button" onclick="loadLabs()" style="margin:0">Load labs</button>
+   </div>
+   <div id="lookup-status" class="hint"></div>
+   <div class="hint">Auto-fills labs + the CT path from the project dataset (production would pull these from the EHR via FHIR/HL7).</div>
+ </div>
  <div class="card"><h3>Imaging (from the NCCT)</h3>
    <div style="margin-bottom:12px">
      <label>Auto-measure from CT — DICOM series folder (on server, optional)</label>
@@ -110,6 +118,22 @@ function measureHU(){
     else { st.style.color='#9fb0c0'; st.textContent='Detected '+stones.length+' stones — click the one you are evaluating.'; }
   }).catch(e=>{st.style.color='#c05621';st.textContent='Error: '+e;});
 }
+function loadLabs(){
+  var mrn=document.getElementsByName('mrn')[0].value.trim();
+  var st=document.getElementById('lookup-status');
+  if(!mrn){st.style.color='#c05621';st.textContent='Enter a UT MRN.';return;}
+  st.style.color='#9fb0c0';st.textContent='Looking up…';
+  var fd=new FormData();fd.append('mrn',mrn);
+  fetch('/api/drstone/labs',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    if(!d.found){st.style.color='#c05621';st.textContent='MRN not found in dataset.';return;}
+    var L=d.labs;
+    for(var k in L){ var el=document.getElementsByName(k)[0];
+      if(el && L[k]!==null && L[k]!==undefined && L[k]!==''){ el.value=L[k]; } }
+    if(d.dicom_path){ document.getElementsByName('dicom_path')[0].value=d.dicom_path; }
+    st.style.color='#2f855a';
+    st.textContent='Labs loaded'+(d.dicom_path?' + CT path filled — click Detect stones.':'. Add stone HU.');
+  }).catch(e=>{st.style.color='#c05621';st.textContent='Error: '+e;});
+}
 </script>
 </body></html>"""
 
@@ -117,6 +141,20 @@ function measureHU(){
 @router.get("/drstone", response_class=HTMLResponse)
 def drstone_page():
     return HTMLResponse(PAGE)
+
+
+@router.post("/api/drstone/labs")
+async def drstone_labs(request: Request):
+    """Auto-fill routine labs + CT path for a patient (research lookup)."""
+    form = dict(await request.form())
+    mrn = str(form.get("mrn", "")).strip()
+    if not mrn:
+        return JSONResponse({"found": False, "error": "no MRN"}, status_code=400)
+    from drstone.lookup import lookup
+    try:
+        return JSONResponse(lookup(mrn))
+    except Exception as e:
+        return JSONResponse({"found": False, "error": str(e)}, status_code=500)
 
 
 @router.post("/api/drstone/measure")
