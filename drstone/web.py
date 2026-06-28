@@ -11,12 +11,23 @@ import os
 import sys
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from drstone import config as C
+from drstone import auth
+from drstone.pages import topbar
 from drstone.predict import predict, compose_assess
 
 router = APIRouter()
+
+
+def _guard_json(request: Request):
+    """Return (user, None) if authenticated, else (None, 401 JSONResponse)."""
+    user = auth.current_user(request)
+    if user is None:
+        return None, JSONResponse({"found": False, "error": "Not authenticated"},
+                                  status_code=401)
+    return user, None
 
 FRIENDLY = {
     "hu_peak": "Stone peak HU", "hu_mean": "Stone mean HU", "urine_ph": "Urine pH",
@@ -28,23 +39,18 @@ FRIENDLY = {
 PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dr Stone — Stone Composition &amp; Management</title>
+<link rel="icon" href="/static/img/logo.png">
+<link rel="stylesheet" href="/static/css/drstone.css">
 <script src="/static/js/vendor/htmx.min.js"></script>
 <style>
- body{margin:0;font-family:system-ui,sans-serif;background:#0e1217;color:#e8edf2}
- .wrap{max-width:880px;margin:0 auto;padding:24px}
- h1{margin:0 0 2px;font-size:24px} .sub{color:#9fb0c0;font-size:13px;margin-bottom:18px}
- .card{background:#161c24;border:1px solid #263445;border-radius:10px;padding:18px;margin-bottom:16px}
- h3{margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#8fa6bd}
- .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
- label{display:block;font-size:12px;color:#aebccb;margin-bottom:3px}
- input,select{width:100%;box-sizing:border-box;background:#0e1217;color:#e8edf2;
-  border:1px solid #2c3e52;border-radius:6px;padding:7px 8px;font-size:14px}
- .hint{font-size:11px;color:#6b7d8f;margin-top:8px}
- button{margin-top:14px;background:#2b6cb0;color:#fff;border:0;border-radius:7px;
-  padding:10px 18px;font-size:15px;cursor:pointer} button:hover{background:#3182ce}
- .disclaimer{font-size:11px;color:#6b7d8f;margin-top:18px;line-height:1.5}
-</style></head><body><div class="wrap">
-<h1>Dr&nbsp;Stone</h1>
+ .stone-opt{cursor:pointer;border:1px solid var(--line-2);border-radius:8px;
+   padding:8px 10px;margin-top:6px;font-size:13px;background:#fff}
+ .stone-opt:hover{border-color:var(--blue)}
+ button[type=button]{margin-top:0}
+</style></head><body>
+<!--TOPBAR-->
+<div class="wrap">
+<h1>New assessment</h1>
 <div class="sub">Stone composition probabilities + acute management (pass vs. treat) + tailored prevention, from a non-contrast stone-protocol CT and routine ED labs — no dual-energy CT required. Decision support / patient education, not a substitute for stone analysis or urology consultation.</div>
 <form hx-post="/api/drstone/predict" hx-target="#result" hx-swap="innerHTML">
  <div class="card"><h3>Patient lookup (research)</h3>
@@ -86,7 +92,7 @@ PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
    <div><label>Sex</label><select name="sex"><option value="">—</option><option>Male</option><option>Female</option></select></div>
  </div>
  <div class="hint">Anion gap is computed from Na, Cl and CO₂. The model tolerates missing labs.</div>
- <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:#e8b9b9;cursor:pointer">
+ <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:#b03030;cursor:pointer">
    <input type="checkbox" name="infection" value="on" style="width:auto;margin:0">
    Suspected infection / obstruction (fever, pyuria, ↑WBC) — flag urologic emergency
  </label>
@@ -108,7 +114,7 @@ function pickStone(idx, stones){
   setVal('hu_p95',Math.round(s.p95_hu||s.peak_hu)); setVal('volume_mm3',Math.round(s.volume_mm3));
   setVal('stone_size_mm',(s.max_diameter_mm||0).toFixed(1)); setVal('location',mapLoc(s.location));
   var rows=document.querySelectorAll('.stone-opt');
-  for(var i=0;i<rows.length;i++){ rows[i].style.borderColor = (i==idx)?'#2f855a':'#2c3e52'; rows[i].style.background=(i==idx)?'#16241b':'#0e1217'; }
+  for(var i=0;i<rows.length;i++){ rows[i].style.borderColor = (i==idx)?'#2f855a':'#cfd9e4'; rows[i].style.background=(i==idx)?'#eafaf0':'#fff'; }
   document.getElementById('measure-status').style.color='#2f855a';
   document.getElementById('measure-status').textContent='Selected '+s.location+' stone: peak '+Math.round(s.peak_hu)+' / mean '+Math.round(s.mean_hu)+' HU. Now add labs and estimate.';
 }
@@ -118,26 +124,26 @@ function measureHU(){
   var st=document.getElementById('measure-status'); var list=document.getElementById('stone-list');
   list.innerHTML='';
   if(!path){st.style.color='#c05621';st.textContent='Enter a DICOM series folder path first.';return;}
-  st.style.color='#9fb0c0'; st.textContent='Segmenting CT and detecting stones (may take ~30-60s)…';
+  st.style.color='#5b6b7c'; st.textContent='Segmenting CT and detecting stones (may take ~30-60s)…';
   var fd=new FormData(); fd.append('dicom_path',path);
   fetch('/api/drstone/measure',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     var stones=d.stones||[]; window._stones=stones;
     if(!stones.length){ st.style.color='#c05621'; st.textContent='No stone detected'+(d.error?(': '+d.error):'')+'. Enter HU manually if needed.'; return; }
     var html='';
     for(var i=0;i<stones.length;i++){ var s=stones[i];
-      html += '<div class="stone-opt" onclick="pickStone('+i+',window._stones)" style="cursor:pointer;border:1px solid #2c3e52;border-radius:6px;padding:8px 10px;margin-top:6px;font-size:13px">'
+      html += '<div class="stone-opt" onclick="pickStone('+i+',window._stones)">'
         + '<b>'+(i+1)+'. '+s.location+'</b> — '+fmtVol(s.volume_mm3)+' — peak '+Math.round(s.peak_hu)+' / mean '+Math.round(s.mean_hu)+' HU</div>';
     }
     list.innerHTML=html;
     if(stones.length==1){ pickStone(0,stones); }
-    else { st.style.color='#9fb0c0'; st.textContent='Detected '+stones.length+' stones — click the one you are evaluating.'; }
+    else { st.style.color='#5b6b7c'; st.textContent='Detected '+stones.length+' stones — click the one you are evaluating.'; }
   }).catch(e=>{st.style.color='#c05621';st.textContent='Error: '+e;});
 }
 function loadLabs(){
   var mrn=document.getElementsByName('mrn')[0].value.trim();
   var st=document.getElementById('lookup-status');
   if(!mrn){st.style.color='#c05621';st.textContent='Enter a UT MRN.';return;}
-  st.style.color='#9fb0c0';st.textContent='Looking up…';
+  st.style.color='#5b6b7c';st.textContent='Looking up…';
   var fd=new FormData();fd.append('mrn',mrn);
   fetch('/api/drstone/labs',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     if(!d.found){st.style.color='#c05621';st.textContent='MRN not found in dataset.';return;}
@@ -154,13 +160,19 @@ function loadLabs(){
 
 
 @router.get("/drstone", response_class=HTMLResponse)
-def drstone_page():
-    return HTMLResponse(PAGE)
+def drstone_page(request: Request):
+    user = auth.current_user(request)
+    if user is None:
+        return RedirectResponse("/login", status_code=303)
+    return HTMLResponse(PAGE.replace("<!--TOPBAR-->", topbar(user)))
 
 
 @router.post("/api/drstone/labs")
 async def drstone_labs(request: Request):
     """Auto-fill routine labs + CT path for a patient (research lookup)."""
+    _user, err = _guard_json(request)
+    if err:
+        return err
     form = dict(await request.form())
     mrn = str(form.get("mrn", "")).strip()
     if not mrn:
@@ -175,6 +187,9 @@ async def drstone_labs(request: Request):
 @router.post("/api/drstone/measure")
 async def drstone_measure(request: Request):
     """Auto-measure stone HU from a DICOM series, in an isolated subprocess."""
+    _user, err = _guard_json(request)
+    if err:
+        return err
     form = dict(await request.form())
     path = str(form.get("dicom_path", "")).strip()
     if not path or not os.path.isdir(path):
@@ -193,14 +208,14 @@ async def drstone_measure(request: Request):
 
 
 TYPE_META = {
-    "CaOx":     ("Calcium oxalate",     "#2c7fb8"),
-    "CaP":      ("Calcium phosphate",   "#41a7c4"),
-    "UA":       ("Uric acid",           "#d9852f"),
-    "Struvite": ("Struvite (infection)", "#8e6fc4"),
-    "Other":    ("Other / uncommon",    "#7a8a99"),
+    "CaOx":     ("Calcium oxalate",      "#2c7fb8"),
+    "CaP":      ("Calcium phosphate",    "#2e93a6"),
+    "UA":       ("Uric acid",            "#c2741f"),
+    "Struvite": ("Struvite (infection)", "#8059b8"),
+    "Other":    ("Other / uncommon",     "#66788a"),
 }
-TIER_COLOR = {"met": "#2f855a", "surveillance": "#3a6ea5",
-              "intervention": "#c05621", "info": "#8295a7"}
+TIER_COLOR = {"met": "#2f855a", "surveillance": "#2b6cb0",
+              "intervention": "#c05621", "info": "#66788a"}
 
 
 def _li(items):
@@ -209,6 +224,10 @@ def _li(items):
 
 @router.post("/api/drstone/predict", response_class=HTMLResponse)
 async def drstone_predict(request: Request):
+    if auth.current_user(request) is None:
+        return HTMLResponse('<div class="card" style="border-color:#c53030;color:#a02020">'
+                            'Your session has expired. <a href="/login">Sign in again</a>.</div>',
+                            status_code=401)
     form = dict(await request.form())
     try:
         r = compose_assess(form)
@@ -218,73 +237,73 @@ async def drstone_predict(request: Request):
     # ---- composition distribution bars ---------------------------------
     bars = ""
     for d in r["distribution"]:
-        label, col = TYPE_META.get(d["type"], (d["type"], "#7a8a99"))
+        label, col = TYPE_META.get(d["type"], (d["type"], "#66788a"))
         pct = d["p"] * 100
         bars += (
-            f'<div style="margin:7px 0">'
-            f'<div style="display:flex;justify-content:space-between;font-size:13px;color:#c3d0dc">'
-            f'<span>{html.escape(label)}</span><span style="font-weight:600;color:{col}">{pct:.0f}%</span></div>'
-            f'<div style="background:#0e1217;border-radius:5px;height:12px;overflow:hidden;border:1px solid #2c3e52;margin-top:2px">'
+            f'<div style="margin:8px 0">'
+            f'<div style="display:flex;justify-content:space-between;font-size:13px;color:#3a4858">'
+            f'<span>{html.escape(label)}</span><span style="font-weight:700;color:{col}">{pct:.0f}%</span></div>'
+            f'<div style="background:#eef2f6;border-radius:5px;height:12px;overflow:hidden;border:1px solid #dde4ec;margin-top:3px">'
             f'<div style="width:{min(100,pct):.0f}%;height:100%;background:{col}"></div></div></div>')
     top_labels = ", ".join(TYPE_META.get(t, (t, ""))[0] for t in r["top"])
 
     # ---- acute panel ---------------------------------------------------
     ac = r["acute"]
-    acol = TIER_COLOR.get(ac["tier"], "#8295a7")
+    acol = TIER_COLOR.get(ac["tier"], "#66788a")
     redflags = ""
     if ac["redflags"]:
-        redflags = ('<div style="background:#2a1416;border:1px solid #a33;border-radius:6px;'
-                    'padding:9px 11px;margin:8px 0">'
-                    '<div style="color:#ff7b7b;font-weight:700;font-size:13px">⚠ Red flags</div>'
-                    f'<ul style="margin:5px 0 0;padding-left:18px;color:#f0c0c0;font-size:13px;line-height:1.5">{_li(ac["redflags"])}</ul></div>')
-    acute_details = (f'<ul style="margin:6px 0 0;padding-left:18px;color:#c3d0dc;font-size:13px;line-height:1.55">{_li(ac["details"])}</ul>'
+        redflags = ('<div style="background:#fdecec;border:1px solid #f3c0c0;border-radius:8px;'
+                    'padding:10px 12px;margin:10px 0">'
+                    '<div style="color:#c53030;font-weight:700;font-size:13px">⚠ Red flags</div>'
+                    f'<ul style="margin:5px 0 0;padding-left:18px;color:#8f2424;font-size:13px;line-height:1.55">{_li(ac["redflags"])}</ul></div>')
+    acute_details = (f'<ul style="margin:8px 0 0;padding-left:18px;color:#3a4858;font-size:13.5px;line-height:1.6">{_li(ac["details"])}</ul>'
                      if ac["details"] else "")
 
     # ---- prevention panel ----------------------------------------------
     prev = r["prevention"]
     blocks = ""
     for b in prev["blocks"]:
-        _, col = TYPE_META.get(b["type"], (b["label"], "#7a8a99"))
+        _, col = TYPE_META.get(b["type"], (b["label"], "#66788a"))
         blocks += (
-            f'<div style="border:1px solid #2c3e52;border-left:4px solid {col};border-radius:6px;padding:9px 12px;margin:8px 0;background:#11161c">'
-            f'<div style="font-weight:600;color:{col};margin-bottom:4px">{html.escape(b["label"])}</div>'
-            f'<div style="font-size:12px;color:#8fa6bd;margin-top:6px;text-transform:uppercase;letter-spacing:.04em">Diet</div>'
-            f'<ul style="margin:3px 0 0;padding-left:18px;font-size:13px;color:#c3d0dc;line-height:1.5">{_li(b["diet"])}</ul>'
-            f'<div style="font-size:12px;color:#8fa6bd;margin-top:6px;text-transform:uppercase;letter-spacing:.04em">Medication</div>'
-            f'<ul style="margin:3px 0 0;padding-left:18px;font-size:13px;color:#c3d0dc;line-height:1.5">{_li(b["meds"])}</ul>'
-            f'<div style="font-size:12px;color:#8fa6bd;margin-top:6px;text-transform:uppercase;letter-spacing:.04em">Lifestyle</div>'
-            f'<ul style="margin:3px 0 0;padding-left:18px;font-size:13px;color:#c3d0dc;line-height:1.5">{_li(b["lifestyle"])}</ul>'
+            f'<div style="border:1px solid #e3e9f0;border-left:4px solid {col};border-radius:8px;padding:10px 13px;margin:10px 0;background:#fbfcfe">'
+            f'<div style="font-weight:700;color:{col};margin-bottom:4px">{html.escape(b["label"])}</div>'
+            f'<div style="font-size:11px;color:#8aa0b5;margin-top:8px;text-transform:uppercase;letter-spacing:.05em;font-weight:700">Diet</div>'
+            f'<ul style="margin:3px 0 0;padding-left:18px;font-size:13px;color:#3a4858;line-height:1.55">{_li(b["diet"])}</ul>'
+            f'<div style="font-size:11px;color:#8aa0b5;margin-top:8px;text-transform:uppercase;letter-spacing:.05em;font-weight:700">Medication</div>'
+            f'<ul style="margin:3px 0 0;padding-left:18px;font-size:13px;color:#3a4858;line-height:1.55">{_li(b["meds"])}</ul>'
+            f'<div style="font-size:11px;color:#8aa0b5;margin-top:8px;text-transform:uppercase;letter-spacing:.05em;font-weight:700">Lifestyle</div>'
+            f'<ul style="margin:3px 0 0;padding-left:18px;font-size:13px;color:#3a4858;line-height:1.55">{_li(b["lifestyle"])}</ul>'
             f'</div>')
     flags = ""
     if prev["flags"]:
-        flags = ('<div style="background:#16202a;border:1px solid #2c4a63;border-radius:6px;padding:9px 11px;margin:8px 0">'
-                 '<div style="color:#8fd0ff;font-weight:600;font-size:13px">Metabolic flags (spot labs)</div>'
-                 f'<ul style="margin:5px 0 0;padding-left:18px;color:#c3d0dc;font-size:13px;line-height:1.5">{_li(prev["flags"])}</ul></div>')
+        flags = ('<div style="background:#eaf3fb;border:1px solid #cfe0f4;border-radius:8px;padding:10px 12px;margin:10px 0">'
+                 '<div style="color:#2b6cb0;font-weight:700;font-size:13px">Metabolic flags (spot labs)</div>'
+                 f'<ul style="margin:5px 0 0;padding-left:18px;color:#34506a;font-size:13px;line-height:1.55">{_li(prev["flags"])}</ul></div>')
 
     return HTMLResponse(f"""
-<div class="card" style="border:1px dashed #b7791f;background:#1a1710">
-  <div style="font-size:12px;color:#e0b15a;line-height:1.5">⚠ {html.escape(r["draft"])}</div>
+<div class="card" style="border:1px dashed #d9a441;background:#fff8e9;box-shadow:none">
+  <div style="font-size:12.5px;color:#946200;line-height:1.5">⚠ {html.escape(r["draft"])}</div>
 </div>
 
 <div class="card">
   <h3>Likely stone composition</h3>
-  <div style="font-size:12px;color:#8295a7;margin-bottom:6px">Probability distribution from CT stone density + routine labs ({r['n_provided']} inputs). Single-energy CT cannot fully separate calcium subtypes — read as a ranked distribution, confirm with stone analysis.</div>
+  <div style="font-size:12.5px;color:#788798;margin-bottom:8px">Probability distribution from CT stone density + routine labs ({r['n_provided']} inputs). Single-energy CT cannot fully separate calcium subtypes — read as a ranked distribution, confirm with stone analysis.</div>
   {bars}
-  <div style="font-size:13px;color:#c3d0dc;margin-top:10px">Most likely: <b>{html.escape(top_labels)}</b></div>
+  <div style="font-size:13.5px;color:#3a4858;margin-top:12px">Most likely: <b style="color:var(--navy)">{html.escape(top_labels)}</b></div>
 </div>
 
 <div class="card" style="border-left:4px solid {acol}">
   <h3 style="color:{acol}">Acute management</h3>
   {redflags}
-  <div style="font-weight:600;color:#e7eef5;font-size:15px;line-height:1.4">{html.escape(ac["headline"])}</div>
+  <div style="font-weight:600;color:var(--ink);font-size:15.5px;line-height:1.4">{html.escape(ac["headline"])}</div>
   {acute_details}
 </div>
 
 <div class="card">
   <h3>Prevention &amp; patient education</h3>
-  <div style="font-size:13px;color:#c3d0dc;line-height:1.5">{html.escape(prev["universal"])}</div>
+  <div style="font-size:13.5px;color:#3a4858;line-height:1.55">{html.escape(prev["universal"])}</div>
   {flags}
   {blocks}
-  <div style="font-size:13px;color:#a9c2d8;background:#11161c;border:1px solid #2c3e52;border-radius:6px;padding:9px 11px;margin-top:8px;line-height:1.5">{html.escape(prev["workup"])}</div>
-  <div style="font-size:11px;color:#6f8296;margin-top:8px">Sources: {html.escape(prev["cite"])}</div>
+  <div style="font-size:13px;color:#34506a;background:#f4f8fc;border:1px solid #d8e4f0;border-radius:8px;padding:10px 12px;margin-top:10px;line-height:1.55">{html.escape(prev["workup"])}</div>
+  <div style="font-size:11px;color:#94a3b1;margin-top:10px">Sources: {html.escape(prev["cite"])}</div>
 </div>""")
