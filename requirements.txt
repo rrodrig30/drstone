@@ -1,0 +1,19 @@
+# Dr Stone — core dependencies
+numpy
+pandas
+scipy
+scikit-learn
+scikit-image
+shap
+matplotlib
+joblib
+openpyxl
+# imaging
+pydicom
+SimpleITK
+nibabel
+TotalSegmentator   # brings torch + nnunetv2 (used for stone/organ segmentation)
+# web
+fastapi
+uvicorn[standard]
+python-multipart

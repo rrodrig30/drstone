@@ -1,0 +1,41 @@
+{
+  "n_stones": 319,
+  "n_patients": 223,
+  "n_ua": 36,
+  "prevalence": 0.11285266457680251,
+  "features": [
+    "hu_peak",
+    "hu_mean",
+    "urine_ph",
+    "co2",
+    "cl",
+    "anion_gap",
+    "bun",
+    "creatinine",
+    "ca",
+    "glucose",
+    "age",
+    "gender_M"
+  ],
+  "auc": 0.7806733411857087,
+  "auc_ci": [
+    0.6765756922509243,
+    0.866583294299665
+  ],
+  "operating_threshold": 0.013035160088399002,
+  "sensitivity": 0.9166666666666666,
+  "sensitivity_ci": [
+    0.8095238095238095,
+    1.0
+  ],
+  "specificity": 0.3250883392226148,
+  "specificity_ci": [
+    0.25345550002524103,
+    0.39322316384180794
+  ],
+  "ppv": 0.14732142857142858,
+  "npv": 0.968421052631579,
+  "brier": 0.08575591276685075,
+  "n_repeats": 25,
+  "n_boot": 1000
+}
