@@ -57,7 +57,7 @@ def main() -> None:
             continue
         t = time.time()
         try:
-            stones = extract_all_stones(r["curated_dir"])
+            stones = extract_all_stones(r["curated_dir"], light=True)
         except Exception as e:
             print(f"[{i + 1}/{len(pts)}] {mrn} FAILED: {e}", flush=True)
             stones = []

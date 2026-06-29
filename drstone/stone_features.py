@@ -124,22 +124,35 @@ def zonation_feature(ct: np.ndarray, mask: np.ndarray, spacing=None) -> dict:
     out = {"hu_core_minus_rim": np.nan, "hu_core_p50": np.nan,
            "hu_rim_p50": np.nan, "hu_core_over_rim": np.nan, "grad_measurable": 0}
 
-    core1 = ndi.binary_erosion(mask, iterations=1)
-    rim1 = mask & ~core1
+    # Crop to the stone's bounding box (+ a False-padded margin) so the distance
+    # transform runs on a tiny local array, not the whole 512x512xN volume. With
+    # the False border the surface distances are identical to the full-volume EDT.
+    zz, yy, xx = np.where(mask)
+    if zz.size == 0:
+        return out
+    sl = tuple(slice(c.min(), c.max() + 1) for c in (zz, yy, xx))
+    # Pad a guaranteed False/background border on every face so surface distance
+    # is measured from the true stone boundary even for a stone flush against the
+    # scan edge — makes the result independent of where the stone sits.
+    m = np.pad(mask[sl], 1, mode="constant", constant_values=False)
+    c = np.pad(ct[sl], 1, mode="constant", constant_values=0)
+
+    core1 = ndi.binary_erosion(m, iterations=1)
+    rim1 = m & ~core1
     if core1.sum() >= 10 and rim1.sum() >= 10:
-        out["hu_core_minus_rim"] = float(ct[core1].mean() - ct[rim1].mean())
+        out["hu_core_minus_rim"] = float(c[core1].mean() - c[rim1].mean())
 
     sampling = spacing if spacing is not None else 1.0
-    edt = ndi.distance_transform_edt(mask, sampling=sampling)
-    depth = edt[mask]
+    edt = ndi.distance_transform_edt(m, sampling=sampling)
+    depth = edt[m]
     if depth.size >= GRAD_MIN_VOX:
         lo, hi = np.percentile(depth, [33, 67])
         if hi > lo:
-            core = mask & (edt >= hi)
-            rim = mask & (edt > 0) & (edt <= lo)
+            core = m & (edt >= hi)
+            rim = m & (edt > 0) & (edt <= lo)
             if core.sum() >= GRAD_MIN_SHELL and rim.sum() >= GRAD_MIN_SHELL:
-                cmed = float(np.median(ct[core]))
-                rmed = float(np.median(ct[rim]))
+                cmed = float(np.median(c[core]))
+                rmed = float(np.median(c[rim]))
                 out["hu_core_p50"] = cmed
                 out["hu_rim_p50"] = rmed
                 out["grad_measurable"] = 1
@@ -148,8 +161,13 @@ def zonation_feature(ct: np.ndarray, mask: np.ndarray, spacing=None) -> dict:
     return out
 
 
-def extract_all_stones(series_dir: str) -> list:
-    """Return a list of per-stone feature dicts for ALL qualifying stones."""
+def extract_all_stones(series_dir: str, light: bool = False) -> list:
+    """Return a list of per-stone feature dicts for ALL qualifying stones.
+
+    light=True computes only centroid + volume + the density-gradient zonation
+    (skips the GMM/Shapiro/marching-cubes features) — same stone ordering, much
+    faster, for the gradient re-extraction.
+    """
     from scipy import ndimage as ndi
     img, ct, spacing = load_ct(series_dir)
     voxvol = float(np.prod(spacing))
@@ -185,9 +203,13 @@ def extract_all_stones(series_dir: str) -> list:
         zz, yy, xx = np.where(comp)
         feats = {"centroid_z": float(zz.mean()), "centroid_y": float(yy.mean()),
                  "centroid_x": float(xx.mean())}
-        feats.update(hu_distribution_features(hu))
-        feats.update(shape_features(comp, spacing))
-        feats.update(zonation_feature(ct, comp, spacing))
+        if light:
+            feats.update({"volume_mm3": vol, "n_vox": int(comp.sum())})
+            feats.update(zonation_feature(ct, comp, spacing))
+        else:
+            feats.update(hu_distribution_features(hu))
+            feats.update(shape_features(comp, spacing))
+            feats.update(zonation_feature(ct, comp, spacing))
         stones.append(feats)
     stones.sort(key=lambda s: -s["volume_mm3"])     # largest first (for rank matching)
     return stones[:MAX_STONES_PER_PATIENT]
