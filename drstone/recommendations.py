@@ -160,6 +160,16 @@ PREVENTION = {
 }
 
 
+def cap_screen_note(target_sens=None) -> str:
+    """DRAFT alert text for a positive high-sensitivity calcium-phosphate screen."""
+    s = f"~{target_sens:.0%} sensitivity" if target_sens else "high sensitivity"
+    return ("High-sensitivity calcium-phosphate screen POSITIVE "
+            f"(tuned to {s}, low specificity — expect false positives). "
+            "Consider a calcium-phosphate work-up: urine pH, serum calcium and PTH, and "
+            "evaluation for distal renal tubular acidosis. Use potassium citrate with caution "
+            "— it raises urine pH and can worsen calcium-phosphate stones.")
+
+
 def metabolic_flags(labs: dict) -> list:
     """Notable spot-lab patterns (with the caveat that 24-h urine is definitive)."""
     f = []

@@ -259,6 +259,17 @@ async def drstone_predict(request: Request):
     acute_details = (f'<ul style="margin:8px 0 0;padding-left:18px;color:#3a4858;font-size:13.5px;line-height:1.6">{_li(ac["details"])}</ul>'
                      if ac["details"] else "")
 
+    # ---- high-sensitivity CaP screen alert -----------------------------
+    cap_alert = ""
+    if r.get("cap_screen"):
+        from drstone.recommendations import cap_screen_note
+        cs = r["cap_screen"]
+        cap_alert = ('<div style="background:#fff3e0;border:1px solid #e0a96d;border-left:4px solid #c05621;'
+                     'border-radius:8px;padding:10px 12px;margin:10px 0">'
+                     '<div style="color:#9a4a13;font-weight:700;font-size:13px">⚑ Calcium-phosphate screen</div>'
+                     f'<div style="font-size:13px;color:#5a3a20;line-height:1.55;margin-top:4px">'
+                     f'{html.escape(cap_screen_note(cs.get("target_sens")))}</div></div>')
+
     # ---- prevention panel ----------------------------------------------
     prev = r["prevention"]
     blocks = ""
@@ -302,6 +313,7 @@ async def drstone_predict(request: Request):
 
 <div class="card">
   <h3>Prevention &amp; patient education</h3>
+  {cap_alert}
   <div style="font-size:13.5px;color:#3a4858;line-height:1.55">{html.escape(prev["universal"])}</div>
   {flags}
   {blocks}

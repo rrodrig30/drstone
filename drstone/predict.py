@@ -56,6 +56,7 @@ def _load_compose():
 
 
 _CAOX_CAP = False  # False = not loaded yet, None = unavailable, dict = loaded
+CAP_ALERT_MIN_MASS = 0.34  # only screen for CaP when calcium is a real contender
 
 
 def _load_caox_cap_head():
@@ -90,9 +91,15 @@ def _refine_calcium(dist: list, vals: dict) -> tuple:
     p["CaP"] = mass * q_cap
     p["CaOx"] = mass * (1.0 - q_cap)
     new = sorted([{"type": t, "p": v} for t, v in p.items()], key=lambda d: -d["p"])
+    # High-sensitivity CaP screen: fire only when calcium is a real contender, so
+    # a clearly UA/struvite stone doesn't trigger a spurious CaP work-up.
+    thr = float(head.get("threshold", 0.5))
+    screen = bool(q_cap >= thr and mass >= CAP_ALERT_MIN_MASS)
     info = {"applied": True, "p_cap_given_calcium": q_cap,
             "calcium_mass": mass, "before": {"CaOx": before[0], "CaP": before[1]},
-            "after": {"CaOx": p["CaOx"], "CaP": p["CaP"]}}
+            "after": {"CaOx": p["CaOx"], "CaP": p["CaP"]},
+            "cap_screen_positive": screen, "threshold": thr,
+            "target_sens": head.get("threshold_target_sens")}
     return new, info
 
 
@@ -129,6 +136,7 @@ def compose_assess(form: dict) -> dict:
     return {"distribution": dist, "top": top, "acute": ac,
             "prevention": prevention(top, labs), "draft": DRAFT_NOTICE,
             "calcium_refined": bool(calcium),
+            "cap_screen": (calcium if (calcium and calcium.get("cap_screen_positive")) else None),
             "n_provided": int(sum(1 for v in vals.values()
                                   if not (isinstance(v, float) and np.isnan(v))))}
 
