@@ -36,16 +36,26 @@ def cohort_patients() -> pd.DataFrame:
     return cur
 
 
+def _arg(name, default=None):
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
+
+
 def main() -> None:
     warnings.filterwarnings("ignore")
-    limit = int(sys.argv[sys.argv.index("--limit") + 1]) if "--limit" in sys.argv else None
+    limit = int(_arg("--limit")) if "--limit" in sys.argv else None
+    nshards = int(_arg("--nshards", 1))
+    shard = int(_arg("--shard", 0))
+    out_path = OUT if nshards == 1 else OUT.replace(".csv", f".part{shard}.csv")
+
     pts = cohort_patients()
+    if nshards > 1:
+        pts = pts[pts.index % nshards == shard].reset_index(drop=True)
     if limit:
         pts = pts.head(limit)
 
     done = set()
-    if os.path.exists(OUT):
-        done = set(pd.read_csv(OUT, dtype={"canonical_mrn": str}).canonical_mrn)
+    if os.path.exists(out_path):
+        done = set(pd.read_csv(out_path, dtype={"canonical_mrn": str}).canonical_mrn)
         print(f"resuming: {len(done)} patients already extracted", flush=True)
 
     print(f"cohort: {len(pts)} patients ({len(pts) - len(done & set(pts.canonical_mrn))} to do)",
@@ -69,12 +79,12 @@ def main() -> None:
             "volume_mm3_recheck": s.get("volume_mm3"),
         } for j, s in enumerate(stones)]
         if rows:
-            pd.DataFrame(rows).to_csv(OUT, mode="a", header=not os.path.exists(OUT),
-                                      index=False)
+            pd.DataFrame(rows).to_csv(out_path, mode="a",
+                                      header=not os.path.exists(out_path), index=False)
         el = time.time() - t0
         print(f"[{i + 1}/{len(pts)}] {mrn}: {len(stones)} stones in {time.time() - t:.0f}s "
               f"(elapsed {el/60:.1f}m)", flush=True)
-    print(f"done -> {OUT}  ({(time.time() - t0)/60:.1f} min)", flush=True)
+    print(f"done -> {out_path}  ({(time.time() - t0)/60:.1f} min)", flush=True)
 
 
 if __name__ == "__main__":
