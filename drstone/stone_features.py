@@ -99,13 +99,53 @@ def shape_features(mask: np.ndarray, spacing) -> dict:
     return out
 
 
-def zonation_feature(ct: np.ndarray, mask: np.ndarray) -> dict:
-    """Core vs rim HU difference (layered/zoned mixtures)."""
+# Stone-density-gradient gating: a core-vs-periphery split is only meaningful
+# when the stone has enough voxels to form concentric shells; below this the
+# "taper" is slice-thickness partial-volume, not mineralogy.
+GRAD_MIN_VOX = 150          # total stone voxels to attempt a depth split
+GRAD_MIN_SHELL = 15         # each of core/periphery shell must reach this
+
+
+def zonation_feature(ct: np.ndarray, mask: np.ndarray, spacing=None) -> dict:
+    """Core-vs-periphery HU zonation (layered/zoned mixtures, density gradient).
+
+    Two views:
+      hu_core_minus_rim : legacy mean difference of a 1-voxel erosion core vs
+                          its 1-voxel rim (kept for continuity with prior runs).
+      hu_core_over_rim  : the density-gradient RATIO HU_core / HU_periphery, with
+                          shells defined by physical depth (mm) from the surface
+                          via a spacing-aware Euclidean distance transform, split
+                          at the 33rd/67th depth percentiles, medians (robust to
+                          the partial-volume rim tail). Emitted only when the
+                          stone is large enough (grad_measurable=1); NaN otherwise
+                          so the model never sees a slice-thickness artifact.
+    """
     from scipy import ndimage as ndi
-    core = ndi.binary_erosion(mask, iterations=1)
-    if core.sum() < 10 or (mask & ~core).sum() < 10:
-        return {"hu_core_minus_rim": np.nan}
-    return {"hu_core_minus_rim": float(ct[core].mean() - ct[mask & ~core].mean())}
+    out = {"hu_core_minus_rim": np.nan, "hu_core_p50": np.nan,
+           "hu_rim_p50": np.nan, "hu_core_over_rim": np.nan, "grad_measurable": 0}
+
+    core1 = ndi.binary_erosion(mask, iterations=1)
+    rim1 = mask & ~core1
+    if core1.sum() >= 10 and rim1.sum() >= 10:
+        out["hu_core_minus_rim"] = float(ct[core1].mean() - ct[rim1].mean())
+
+    sampling = spacing if spacing is not None else 1.0
+    edt = ndi.distance_transform_edt(mask, sampling=sampling)
+    depth = edt[mask]
+    if depth.size >= GRAD_MIN_VOX:
+        lo, hi = np.percentile(depth, [33, 67])
+        if hi > lo:
+            core = mask & (edt >= hi)
+            rim = mask & (edt > 0) & (edt <= lo)
+            if core.sum() >= GRAD_MIN_SHELL and rim.sum() >= GRAD_MIN_SHELL:
+                cmed = float(np.median(ct[core]))
+                rmed = float(np.median(ct[rim]))
+                out["hu_core_p50"] = cmed
+                out["hu_rim_p50"] = rmed
+                out["grad_measurable"] = 1
+                if rmed > 0:
+                    out["hu_core_over_rim"] = cmed / rmed
+    return out
 
 
 def extract_all_stones(series_dir: str) -> list:
@@ -147,7 +187,7 @@ def extract_all_stones(series_dir: str) -> list:
                  "centroid_x": float(xx.mean())}
         feats.update(hu_distribution_features(hu))
         feats.update(shape_features(comp, spacing))
-        feats.update(zonation_feature(ct, comp))
+        feats.update(zonation_feature(ct, comp, spacing))
         stones.append(feats)
     stones.sort(key=lambda s: -s["volume_mm3"])     # largest first (for rank matching)
     return stones[:MAX_STONES_PER_PATIENT]
