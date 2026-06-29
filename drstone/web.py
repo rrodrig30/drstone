@@ -247,6 +247,36 @@ async def drstone_predict(request: Request):
             f'<div style="width:{min(100,pct):.0f}%;height:100%;background:{col}"></div></div></div>')
     top_labels = ", ".join(TYPE_META.get(t, (t, ""))[0] for t in r["top"])
 
+    # ---- specialist head readout: full P(CaP | calcium) -----------------
+    head_html = ""
+    ch = r.get("calcium_head")
+    if ch and ch.get("calcium_relevant"):
+        q = ch["p_cap_given_calcium"] * 100
+        thr = ch["threshold"] * 100
+        ts = ch.get("target_sens")
+        pos = ch.get("cap_screen_positive")
+        status = (f'<span style="color:#c05621;font-weight:700">screen positive</span> '
+                  f'(≥{thr:.0f}%)' if pos else
+                  f'<span style="color:#2b6cb0;font-weight:600">screen negative</span> (&lt;{thr:.0f}%)')
+        capcol, oxcol = TYPE_META["CaP"][1], TYPE_META["CaOx"][1]
+        tsl = f" · tuned to ~{ts:.0%} CaP sensitivity" if ts else ""
+        head_html = (
+            f'<div style="margin-top:12px;padding:10px 12px;border:1px solid #e3e9f0;'
+            f'border-radius:8px;background:#fbfcfe">'
+            f'<div style="font-size:12px;color:#8aa0b5;text-transform:uppercase;letter-spacing:.04em;font-weight:700">'
+            f'Calcium-subtype specialist (HU + acid–base labs)</div>'
+            f'<div style="font-size:13.5px;color:#3a4858;margin-top:5px">Among calcium stones: '
+            f'<b style="color:{capcol}">calcium phosphate {q:.0f}%</b> vs. '
+            f'<b style="color:{oxcol}">calcium oxalate {100-q:.0f}%</b></div>'
+            # bar with a threshold tick
+            f'<div style="position:relative;background:{oxcol};border-radius:5px;height:12px;'
+            f'overflow:hidden;border:1px solid #dde4ec;margin-top:5px">'
+            f'<div style="width:{min(100,q):.0f}%;height:100%;background:{capcol}"></div>'
+            f'<div style="position:absolute;top:-2px;bottom:-2px;left:{min(100,thr):.0f}%;'
+            f'width:2px;background:#1f2a37"></div></div>'
+            f'<div style="font-size:11.5px;color:#788798;margin-top:5px">CaP work-up {status}{tsl}. '
+            f'Vertical mark = screen threshold.</div></div>')
+
     # ---- acute panel ---------------------------------------------------
     ac = r["acute"]
     acol = TIER_COLOR.get(ac["tier"], "#66788a")
@@ -301,7 +331,7 @@ async def drstone_predict(request: Request):
   <div style="font-size:12.5px;color:#788798;margin-bottom:8px">Probability distribution from CT stone density + routine labs ({r['n_provided']} inputs). Single-energy CT cannot fully separate calcium subtypes — read as a ranked distribution, confirm with stone analysis.</div>
   {bars}
   <div style="font-size:13.5px;color:#3a4858;margin-top:12px">Most likely: <b style="color:var(--navy)">{html.escape(top_labels)}</b></div>
-  {('<div style="font-size:11.5px;color:#2b6cb0;margin-top:6px">↳ Calcium oxalate vs. phosphate split refined by the specialist (HU + acid-base labs) model.</div>' if r.get("calcium_refined") else '')}
+  {head_html}
 </div>
 
 <div class="card" style="border-left:4px solid {acol}">

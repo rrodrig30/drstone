@@ -94,12 +94,14 @@ def _refine_calcium(dist: list, vals: dict) -> tuple:
     # High-sensitivity CaP screen: fire only when calcium is a real contender, so
     # a clearly UA/struvite stone doesn't trigger a spurious CaP work-up.
     thr = float(head.get("threshold", 0.5))
-    screen = bool(q_cap >= thr and mass >= CAP_ALERT_MIN_MASS)
+    relevant = bool(mass >= CAP_ALERT_MIN_MASS)
+    screen = bool(q_cap >= thr and relevant)
     info = {"applied": True, "p_cap_given_calcium": q_cap,
-            "calcium_mass": mass, "before": {"CaOx": before[0], "CaP": before[1]},
+            "p_caox_given_calcium": 1.0 - q_cap, "calcium_mass": mass,
+            "before": {"CaOx": before[0], "CaP": before[1]},
             "after": {"CaOx": p["CaOx"], "CaP": p["CaP"]},
-            "cap_screen_positive": screen, "threshold": thr,
-            "target_sens": head.get("threshold_target_sens")}
+            "calcium_relevant": relevant, "cap_screen_positive": screen,
+            "threshold": thr, "target_sens": head.get("threshold_target_sens")}
     return new, info
 
 
@@ -136,6 +138,7 @@ def compose_assess(form: dict) -> dict:
     return {"distribution": dist, "top": top, "acute": ac,
             "prevention": prevention(top, labs), "draft": DRAFT_NOTICE,
             "calcium_refined": bool(calcium),
+            "calcium_head": calcium,
             "cap_screen": (calcium if (calcium and calcium.get("cap_screen_positive")) else None),
             "n_provided": int(sum(1 for v in vals.values()
                                   if not (isinstance(v, float) and np.isnan(v))))}
