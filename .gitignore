@@ -13,6 +13,11 @@ __pycache__/
 venv/
 .ipynb_checkpoints/
 
+# Secrets / local config (credentials must never be committed)
+.env
+.env.*
+!.env.example
+
 # Misc
 *.log
 .DS_Store

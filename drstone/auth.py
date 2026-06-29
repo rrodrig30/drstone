@@ -22,11 +22,11 @@ SESSION_COOKIE = "drstone_session"
 SESSION_MAX_AGE = 60 * 60 * 12          # 12 hours
 _PBKDF2_ITER = 240_000
 
-# Seed superuser (provisioned on startup if absent). Overridable via env so the
-# credential need not live in source on shared/public deployments; the provided
-# defaults keep a fresh clone working out of the box. ROTATE in production.
+# Seed superuser (provisioned on startup if absent). The PASSWORD is never kept
+# in source — it is read from the environment (typically the git-ignored .env;
+# see .env.example). Email/name are not secrets and keep sensible defaults.
 SUPERUSER_EMAIL = os.environ.get("DRSTONE_SUPERUSER_EMAIL", "rodriguezr32@uthscsa.edu")
-SUPERUSER_PASSWORD = os.environ.get("DRSTONE_SUPERUSER_PASSWORD", "UroChair115!")
+SUPERUSER_PASSWORD = os.environ.get("DRSTONE_SUPERUSER_PASSWORD")
 SUPERUSER_NAME = os.environ.get("DRSTONE_SUPERUSER_NAME", "Dr. Rodriguez")
 
 
@@ -124,16 +124,28 @@ def authenticate(email: str, password: str):
 
 
 def seed_superuser() -> None:
-    """Provision the superuser account on startup if it does not exist."""
+    """Provision the superuser on startup from the environment-supplied password.
+
+    No password in the environment -> we do not create a new account (an existing
+    superuser keeps working). Set DRSTONE_SUPERUSER_RESET=1 to force the stored
+    password/role to match the current env value (used to rotate via .env).
+    """
     init_db()
     existing = get_user_by_email(SUPERUSER_EMAIL)
+    reset = os.environ.get("DRSTONE_SUPERUSER_RESET", "").lower() in ("1", "true", "yes", "on")
     if existing is None:
+        if not SUPERUSER_PASSWORD:
+            return  # nothing to provision; configure DRSTONE_SUPERUSER_PASSWORD
         create_user(SUPERUSER_EMAIL, SUPERUSER_PASSWORD,
                     full_name=SUPERUSER_NAME, role="superuser")
-    elif existing["role"] != "superuser":
+        return
+    if existing["role"] != "superuser":
         with _conn() as c:
-            c.execute("UPDATE users SET role='superuser' WHERE id=?",
-                      (existing["id"],))
+            c.execute("UPDATE users SET role='superuser' WHERE id=?", (existing["id"],))
+    if reset and SUPERUSER_PASSWORD:
+        with _conn() as c:
+            c.execute("UPDATE users SET password_hash=?, role='superuser' WHERE id=?",
+                      (hash_password(SUPERUSER_PASSWORD), existing["id"]))
 
 
 # --------------------------------------------------------------------------

@@ -6,6 +6,24 @@ import os
 
 # --- Paths -----------------------------------------------------------------
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def _load_dotenv(path: str) -> None:
+    """Minimal, dependency-free .env loader. Real environment variables take
+    precedence (setdefault), so .env only fills in what isn't already set."""
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+# Load local secrets/config (git-ignored) before any os.environ.get below.
+_load_dotenv(os.path.join(REPO_ROOT, ".env"))
 # Processed tables + intermediate outputs (git-ignored).
 DATA_DIR = os.environ.get("DRSTONE_DATA_DIR", os.path.join(REPO_ROOT, "data"))
 OUTPUT_DIR = DATA_DIR
