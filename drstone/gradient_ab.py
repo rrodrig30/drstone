@@ -192,12 +192,54 @@ def main():
         print(f"    {grad_feats[k]:16s} {imp[k]:.4f}")
 
     # ---- per-kernel stability of the ratio ---------------------------------
+    # A trustworthy density-gradient should be stable within a kernel (low CV)
+    # and should NOT depend on the kernel for a fixed composition. Sharp/bone
+    # kernels edge-enhance the rim and would deflate the core/rim ratio.
+    def is_sharp(k):
+        ks = str(k).upper()
+        return any(h in ks for h in C.SHARP_KERNEL_HINTS)
+
     print(f"\n==== ratio stability by reconstruction kernel ====")
-    mk = df[df[GRAD].notna()]
+    mk = df[df[GRAD].notna()].copy()
+    mk["ksharp"] = mk["kernel"].apply(lambda k: "sharp" if is_sharp(k) else "soft")
+    kern_tbl = {}
+    print(f"  {'kernel':10s} {'class':6s} {'n':>4s} {'mean':>7s} {'sd':>6s} {'CV':>6s} {'median':>7s}")
     for kern, g in mk.groupby(mk["kernel"].fillna("unknown")):
         if len(g) >= 5:
-            print(f"  {str(kern):10s} n={len(g):3d}  ratio mean={g[GRAD].mean():.2f} "
-                  f"sd={g[GRAD].std():.2f}  median={g[GRAD].median():.2f}")
+            cv = g[GRAD].std() / g[GRAD].mean() if g[GRAD].mean() else float("nan")
+            cls = "sharp" if is_sharp(kern) else "soft"
+            print(f"  {str(kern):10s} {cls:6s} {len(g):4d} {g[GRAD].mean():7.2f} "
+                  f"{g[GRAD].std():6.2f} {cv:6.2f} {g[GRAD].median():7.2f}")
+            kern_tbl[str(kern)] = {"n": int(len(g)), "mean": float(g[GRAD].mean()),
+                                   "sd": float(g[GRAD].std()), "cv": float(cv), "class": cls}
+
+    # Does kernel CLASS shift the ratio for a fixed composition? (confounding)
+    print(f"\n  -- core/rim ratio by composition x kernel-class (mean; n) --")
+    print(f"  {'comp':9s} {'soft':>14s} {'sharp':>14s}")
+    confound = {}
+    for c in CLASSES:
+        gc = mk[mk["y"] == c]
+        soft = gc[gc.ksharp == "soft"][GRAD]; sharp = gc[gc.ksharp == "sharp"][GRAD]
+        if len(soft) >= 3 or len(sharp) >= 3:
+            sft = f"{soft.mean():.2f} (n={len(soft)})" if len(soft) else "  -  "
+            shp = f"{sharp.mean():.2f} (n={len(sharp)})" if len(sharp) else "  -  "
+            print(f"  {c:9s} {sft:>14s} {shp:>14s}")
+            confound[c] = {"soft_mean": (float(soft.mean()) if len(soft) else None),
+                           "soft_n": int(len(soft)),
+                           "sharp_mean": (float(sharp.mean()) if len(sharp) else None),
+                           "sharp_n": int(len(sharp))}
+    # CaOx-vs-CaP ratio gap WITHIN each kernel class — is the signal preserved?
+    print(f"\n  -- CaOx-vs-CaP ratio gap within each kernel class --")
+    gap_by_class = {}
+    for cls in ("soft", "sharp"):
+        sub = mk[mk.ksharp == cls]
+        ox = sub[sub.y == "CaOx"][GRAD]; cp = sub[sub.y == "CaP"][GRAD]
+        if len(ox) >= 3 and len(cp) >= 3:
+            gap = ox.mean() - cp.mean()
+            print(f"  {cls:6s}  CaOx={ox.mean():.2f} (n={len(ox)})  CaP={cp.mean():.2f} "
+                  f"(n={len(cp)})  gap={gap:+.2f}")
+            gap_by_class[cls] = {"caox_mean": float(ox.mean()), "cap_mean": float(cp.mean()),
+                                 "gap": float(gap), "n_caox": int(len(ox)), "n_cap": int(len(cp))}
 
     # ---- ratio by composition (the biology check) -------------------------
     print(f"\n==== ratio by dominant composition (measurable stones) ====")
@@ -212,7 +254,9 @@ def main():
            "baseline": sa, "plus_gradient": sb,
            "caox_vs_cap": {"hu_only_auc": a_auc, "hu_plus_ratio_auc": b_auc,
                            "n": n_sub, "n_caox": n_caox},
-           "shap_rank_of_ratio": rank, "shap_importance_ratio": float(imp[grad_feats.index(GRAD)])}
+           "shap_rank_of_ratio": rank, "shap_importance_ratio": float(imp[grad_feats.index(GRAD)]),
+           "per_kernel": kern_tbl, "ratio_by_comp_kernelclass": confound,
+           "caox_cap_gap_by_kernelclass": gap_by_class}
     json.dump(res, open(os.path.join(C.MODEL_DIR, "drstone_gradient_ab.json"), "w"), indent=2)
     try:
         import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
