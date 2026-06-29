@@ -45,25 +45,41 @@ def main() -> None:
     limit = int(_arg("--limit")) if "--limit" in sys.argv else None
     nshards = int(_arg("--nshards", 1))
     shard = int(_arg("--shard", 0))
-    out_path = OUT if nshards == 1 else OUT.replace(".csv", f".part{shard}.csv")
+    suffix = _arg("--suffix", "")           # distinct output file for a tail helper
+    reverse = "--reverse" in sys.argv        # iterate the shard list back-to-front
+    out_path = OUT if nshards == 1 else OUT.replace(".csv", f".part{shard}{suffix}.csv")
 
     pts = cohort_patients()
     if nshards > 1:
         pts = pts[pts.index % nshards == shard].reset_index(drop=True)
+    if reverse:
+        pts = pts.iloc[::-1].reset_index(drop=True)
     if limit:
         pts = pts.head(limit)
 
-    done = set()
-    if os.path.exists(out_path):
-        done = set(pd.read_csv(out_path, dtype={"canonical_mrn": str}).canonical_mrn)
-        print(f"resuming: {len(done)} patients already extracted", flush=True)
+    import glob as _glob
 
+    def load_done():
+        """All patients already written to ANY part file for this shard, so a
+        forward + reverse pair (and the original run) skip each other's work."""
+        d = set()
+        for src in _glob.glob(OUT.replace(".csv", f".part{shard}*.csv")) + [out_path]:
+            if os.path.exists(src):
+                try:
+                    d |= set(pd.read_csv(src, dtype={"canonical_mrn": str}).canonical_mrn)
+                except Exception:
+                    pass
+        return d
+
+    done = load_done()
+    if done:
+        print(f"resuming: {len(done)} patients already extracted", flush=True)
     print(f"cohort: {len(pts)} patients ({len(pts) - len(done & set(pts.canonical_mrn))} to do)",
           flush=True)
     t0 = time.time()
     for i, r in pts.iterrows():
         mrn = r["canonical_mrn"]
-        if mrn in done:
+        if mrn in load_done():          # refresh each iter: skip what the sibling did
             continue
         t = time.time()
         try:
