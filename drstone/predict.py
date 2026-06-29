@@ -55,6 +55,47 @@ def _load_compose():
     return _COMPOSE
 
 
+_CAOX_CAP = False  # False = not loaded yet, None = unavailable, dict = loaded
+
+
+def _load_caox_cap_head():
+    """The CaOx-vs-CaP specialist head (HU+labs); None if not present."""
+    global _CAOX_CAP
+    if _CAOX_CAP is False:
+        import joblib
+        path = os.path.join(C.MODEL_DIR, "drstone_caox_cap_head.pkl")
+        _CAOX_CAP = joblib.load(path) if os.path.exists(path) else None
+    return _CAOX_CAP
+
+
+def _refine_calcium(dist: list, vals: dict) -> tuple:
+    """Re-partition the combined CaOx+CaP probability mass using the specialist
+    head (a better calcium-subtype estimator than the 5-class model), leaving
+    UA/Struvite/Other untouched. Returns (new_dist, info|None)."""
+    head = _load_caox_cap_head()
+    if head is None:
+        return dist, None
+    p = {d["type"]: d["p"] for d in dist}
+    if "CaOx" not in p or "CaP" not in p:
+        return dist, None
+    mass = p["CaOx"] + p["CaP"]
+    if mass <= 1e-6:
+        return dist, None
+    X = pd.DataFrame([[vals.get(f, np.nan) for f in head["features"]]],
+                     columns=head["features"])
+    cls = list(head["model"].classes_)
+    j = cls.index(1) if 1 in cls else (len(cls) - 1)   # P(CaP); positive class = 1
+    q_cap = float(head["model"].predict_proba(X)[0, j])
+    before = (p["CaOx"], p["CaP"])
+    p["CaP"] = mass * q_cap
+    p["CaOx"] = mass * (1.0 - q_cap)
+    new = sorted([{"type": t, "p": v} for t, v in p.items()], key=lambda d: -d["p"])
+    info = {"applied": True, "p_cap_given_calcium": q_cap,
+            "calcium_mass": mass, "before": {"CaOx": before[0], "CaP": before[1]},
+            "after": {"CaOx": p["CaOx"], "CaP": p["CaP"]}}
+    return new, info
+
+
 def compose_assess(form: dict) -> dict:
     """Full assessment: composition distribution + acute (MET vs surgery) +
     prevention guidance. Inputs are routine ED data; missing values tolerated."""
@@ -78,6 +119,8 @@ def compose_assess(form: dict) -> dict:
     proba = b["model"].predict_proba(X)[0]
     dist = sorted([{"type": c, "p": float(p)} for c, p in zip(classes, proba)],
                   key=lambda d: -d["p"])
+    # Cascade: defer the calcium-oxalate-vs-phosphate split to the specialist head.
+    dist, calcium = _refine_calcium(dist, vals)
     top = [d["type"] for d in dist[:2] if d["p"] >= 0.15] or [dist[0]["type"]]
     diam = _num(form.get("stone_size_mm"))
     ac = acute(diameter_mm=(None if (isinstance(diam, float) and np.isnan(diam)) else diam),
@@ -85,6 +128,7 @@ def compose_assess(form: dict) -> dict:
                infection=str(form.get("infection", "")).lower() in ("1", "true", "yes", "on"))
     return {"distribution": dist, "top": top, "acute": ac,
             "prevention": prevention(top, labs), "draft": DRAFT_NOTICE,
+            "calcium_refined": bool(calcium),
             "n_provided": int(sum(1 for v in vals.values()
                                   if not (isinstance(v, float) and np.isnan(v))))}
 

@@ -290,6 +290,7 @@ async def drstone_predict(request: Request):
   <div style="font-size:12.5px;color:#788798;margin-bottom:8px">Probability distribution from CT stone density + routine labs ({r['n_provided']} inputs). Single-energy CT cannot fully separate calcium subtypes — read as a ranked distribution, confirm with stone analysis.</div>
   {bars}
   <div style="font-size:13.5px;color:#3a4858;margin-top:12px">Most likely: <b style="color:var(--navy)">{html.escape(top_labels)}</b></div>
+  {('<div style="font-size:11.5px;color:#2b6cb0;margin-top:6px">↳ Calcium oxalate vs. phosphate split refined by the specialist (HU + acid-base labs) model.</div>' if r.get("calcium_refined") else '')}
 </div>
 
 <div class="card" style="border-left:4px solid {acol}">
