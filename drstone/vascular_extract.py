@@ -31,12 +31,23 @@ import pandas as pd
 from drstone import config as C
 
 OUT = os.path.join(C.OUTPUT_DIR, "drstone_vascular.csv")
-CALC_HU = 130.0
+# Calcification thresholds. 130 HU is the Agatston seed, but a thin shell on a
+# 3 mm stone-protocol CT is noisy at 130 (partial volume) -> a focus must reach a
+# true-calcium PEAK and clear a size window (exclude single-voxel noise AND large
+# bone bleed-through), and is density-weighted Agatston-style.
+CALC_SEED_HU = 130.0      # voxel inclusion seed
+CALC_PEAK_HU = 200.0      # a focus must peak >= this to count as real calcium
+CALC_MIN_MM3 = 4.0        # ~>=2 voxels; drop single-voxel noise
+CALC_MAX_MM3 = 200.0      # drop bone/spine bleed-through chunks
 AORTA_WALL_MM = 2.0       # wall shell around the (non-contrast) aortic lumen
-BONE_PAD_MM = 2.0         # keep adjacent vertebral bone out of the aortic ROI
+BONE_PAD_MM = 3.0         # keep adjacent vertebral bone out of the aortic ROI
 BONE_ROIS = ["vertebrae_L1", "vertebrae_L2", "vertebrae_L3", "vertebrae_L4",
-             "vertebrae_L5", "vertebrae_T12"]
+             "vertebrae_L5", "vertebrae_T11", "vertebrae_T12"]
 ROIS = ["aorta", "urinary_bladder", "prostate"] + BONE_ROIS
+
+
+def _agatston_factor(peak_hu: float) -> int:
+    return 4 if peak_hu >= 400 else 3 if peak_hu >= 300 else 2 if peak_hu >= 200 else 1
 
 
 def extract_vascular(series_dir: str) -> dict:
@@ -44,7 +55,8 @@ def extract_vascular(series_dir: str) -> dict:
     from drstone.calibration import load_ct
     from drstone.stone_segmentation import _run_ts
     out = {"aortic_calc_vol_mm3": np.nan, "aortic_calc_frac": np.nan,
-           "aortic_calc_nfoci": np.nan, "aorta_vol_mm3": np.nan,
+           "aortic_calc_nfoci": np.nan, "aortic_agatston": np.nan,
+           "aorta_vol_mm3": np.nan,
            "bladder_vol_mm3": np.nan, "bladder_wall_frac": np.nan,
            "prostate_present": 0, "prostate_calc_vol_mm3": np.nan}
     img, ct, spacing = load_ct(series_dir)
@@ -57,7 +69,7 @@ def extract_vascular(series_dir: str) -> dict:
     def _it(mm):
         return max(1, int(mm / inplane))
 
-    # ---- aortic wall calcification --------------------------------------
+    # ---- aortic wall calcification (Agatston-style, denoised) -----------
     aorta = masks.get("aorta")
     if aorta is not None and aorta.sum() > 200:
         bone = np.zeros(ct.shape, bool)
@@ -67,11 +79,21 @@ def extract_vascular(series_dir: str) -> dict:
         shell = ndi.binary_dilation(aorta, iterations=_it(AORTA_WALL_MM)) & ~aorta
         if bone.any():
             shell &= ~ndi.binary_dilation(bone, iterations=_it(BONE_PAD_MM))
-        calc = shell & (ct > CALC_HU)
-        _, nf = ndi.label(calc)
+        lab, n = ndi.label(shell & (ct > CALC_SEED_HU))
+        vol = 0.0; agat = 0.0; nf = 0
+        for i in range(1, n + 1):
+            comp = lab == i
+            cv = comp.sum() * voxvol
+            if cv < CALC_MIN_MM3 or cv > CALC_MAX_MM3:
+                continue
+            peak = float(ct[comp].max())
+            if peak < CALC_PEAK_HU:          # partial-volume rim, not real calcium
+                continue
+            vol += cv; agat += cv * _agatston_factor(peak); nf += 1
         out["aorta_vol_mm3"] = float(aorta.sum() * voxvol)
-        out["aortic_calc_vol_mm3"] = float(calc.sum() * voxvol)
-        out["aortic_calc_frac"] = float(calc.sum() / max(1, aorta.sum()))
+        out["aortic_calc_vol_mm3"] = float(vol)
+        out["aortic_agatston"] = float(agat)
+        out["aortic_calc_frac"] = float(vol / (aorta.sum() * voxvol))
         out["aortic_calc_nfoci"] = int(nf)
 
     # ---- bladder volume + crude wall fraction (exploratory) -------------
@@ -86,7 +108,7 @@ def extract_vascular(series_dir: str) -> dict:
     pr = masks.get("prostate")
     if pr is not None and pr.sum() > 100:
         out["prostate_present"] = 1
-        out["prostate_calc_vol_mm3"] = float((pr & (ct > CALC_HU)).sum() * voxvol)
+        out["prostate_calc_vol_mm3"] = float((pr & (ct > CALC_SEED_HU)).sum() * voxvol)
     return out
 
 

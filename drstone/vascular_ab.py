@@ -30,8 +30,9 @@ from drstone.gradient_ab import build_table
 
 warnings.filterwarnings("ignore")
 
-VASC = ["aortic_calc_frac", "aortic_calc_vol_mm3", "aortic_calc_nfoci"]
+VASC = ["aortic_agatston", "aortic_calc_vol_mm3", "aortic_calc_nfoci"]
 INFECT = ["bladder_wall_frac", "bladder_vol_mm3", "prostate_calc_vol_mm3"]
+CALCVAR = "aortic_agatston"   # denoised, density-weighted score for the biology gate
 N_BOOT = 3000
 
 
@@ -71,15 +72,15 @@ def biology_gate(df):
             print(f"  {c:9s} {len(g):4d} {g['aortic_calc_vol_mm3'].median():20.1f} "
                   f"{g['aortic_calc_nfoci'].median():11.0f} {g['bladder_wall_frac'].mean():12.3f}")
 
-    sub = df[df["y"].isin(["CaOx", "CaP"])].dropna(subset=["aortic_calc_vol_mm3"]).copy()
-    ox = sub[sub.y == "CaOx"]["aortic_calc_vol_mm3"]; cp = sub[sub.y == "CaP"]["aortic_calc_vol_mm3"]
+    sub = df[df["y"].isin(["CaOx", "CaP"])].dropna(subset=[CALCVAR]).copy()
+    ox = sub[sub.y == "CaOx"][CALCVAR]; cp = sub[sub.y == "CaP"][CALCVAR]
     u, p = stats.mannwhitneyu(ox, cp, alternative="two-sided")
     direction = "CaP MORE (supports)" if cp.median() > ox.median() else "CaOx more (against)"
     print(f"\n  unadjusted: CaOx med {ox.median():.1f} vs CaP med {cp.median():.1f} -> {direction}; MWU p={p:.3f}")
 
     # age-adjusted: logistic regression P(CaP) ~ age + log(aortic_calc) — is the
     # aortic-calc coefficient significant beyond age?
-    sub["lcalc"] = np.log1p(sub["aortic_calc_vol_mm3"])
+    sub["lcalc"] = np.log1p(sub[CALCVAR])
     sub["age_f"] = pd.to_numeric(sub["age"], errors="coerce")
     s2 = sub.dropna(subset=["age_f"])
     yb = (s2.y == "CaP").astype(int).values
