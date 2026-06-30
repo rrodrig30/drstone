@@ -126,14 +126,19 @@ def segment_stone_full(series_dir: str):
 def list_stones(series_dir: str, max_stones: int = 6) -> list:
     """List ALL qualifying stones (largest first) with HU + volume + anatomic
     location, so a user can pick the intended stone in a multi-stone scan."""
-    from scipy import ndimage as ndi
     img, ct, spacing = load_ct(series_dir)
-    voxvol = float(np.prod(spacing))
-    inplane = max(spacing[1], 0.4)
     with tempfile.TemporaryDirectory() as wd:
         masks = _run_ts(img, REGION_ROIS + EXCLUDE_ROIS, wd)
+    return stones_from_masks(ct, spacing, masks, max_stones)
+
+
+def stones_from_masks(ct, spacing, masks, max_stones: int = 6) -> list:
+    """The stone-listing core, on precomputed TS masks (shareable TS pass)."""
+    from scipy import ndimage as ndi
     if not masks:
         return []
+    voxvol = float(np.prod(spacing))
+    inplane = max(spacing[1], 0.4)
     region = np.zeros(ct.shape, bool)
     for r in REGION_ROIS:
         if r in masks:

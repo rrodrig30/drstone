@@ -78,6 +78,7 @@ PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
    <div><label>Location</label><select name="location"><option value="">—</option><option>Renal</option><option>Ureteral</option><option>Bladder</option></select></div>
  </div>
  <input type="hidden" name="hu_p95"><input type="hidden" name="volume_mm3">
+ <input type="hidden" name="nephrocalc_nfoci"><input type="hidden" name="nephrocalc_vol_mm3">
  </div>
  <div class="card"><h3>Labs &amp; demographics (leave unknown blank)</h3><div class="grid">
    <div><label>Urine pH</label><input name="urine_ph" type="number" step="0.1" placeholder="5.0-9.0"></div>
@@ -128,15 +129,20 @@ function measureHU(){
   var fd=new FormData(); fd.append('dicom_path',path);
   fetch('/api/drstone/measure',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     var stones=d.stones||[]; window._stones=stones;
-    if(!stones.length){ st.style.color='#c05621'; st.textContent='No stone detected'+(d.error?(': '+d.error):'')+'. Enter HU manually if needed.'; return; }
+    // capture nephrocalcinosis (patient-level) regardless of stone picking
+    var nc=d.nephrocalc||{}; var ncf=nc.nephrocalc_nfoci||0;
+    setVal('nephrocalc_nfoci', ncf||'');
+    setVal('nephrocalc_vol_mm3', nc.nephrocalc_vol_mm3!=null?Math.round(nc.nephrocalc_vol_mm3):'');
+    var ncMsg = ncf>=5 ? ' · ⚑ '+(ncf>=10?'marked':'moderate')+' nephrocalcinosis ('+ncf+' foci)' : '';
+    if(!stones.length){ st.style.color='#c05621'; st.textContent='No stone detected'+(d.error?(': '+d.error):'')+'. Enter HU manually if needed.'+ncMsg; return; }
     var html='';
     for(var i=0;i<stones.length;i++){ var s=stones[i];
       html += '<div class="stone-opt" onclick="pickStone('+i+',window._stones)">'
         + '<b>'+(i+1)+'. '+s.location+'</b> — '+fmtVol(s.volume_mm3)+' — peak '+Math.round(s.peak_hu)+' / mean '+Math.round(s.mean_hu)+' HU</div>';
     }
     list.innerHTML=html;
-    if(stones.length==1){ pickStone(0,stones); }
-    else { st.style.color='#5b6b7c'; st.textContent='Detected '+stones.length+' stones — click the one you are evaluating.'; }
+    if(stones.length==1){ pickStone(0,stones); st.textContent+=ncMsg; }
+    else { st.style.color='#5b6b7c'; st.textContent='Detected '+stones.length+' stones — click the one you are evaluating.'+ncMsg; }
   }).catch(e=>{st.style.color='#c05621';st.textContent='Error: '+e;});
 }
 function loadLabs(){
@@ -300,6 +306,17 @@ async def drstone_predict(request: Request):
                      f'<div style="font-size:13px;color:#5a3a20;line-height:1.55;margin-top:4px">'
                      f'{html.escape(cap_screen_note(cs.get("target_sens")))}</div></div>')
 
+    # ---- nephrocalcinosis flag (deterministic radiologic finding) -------
+    nephro_alert = ""
+    if r.get("nephro_flag"):
+        from drstone.recommendations import nephro_flag_note
+        nf = r["nephro_flag"]
+        nephro_alert = ('<div style="background:#fdeef0;border:1px solid #e0a9b3;border-left:4px solid #b03048;'
+                        'border-radius:8px;padding:10px 12px;margin:10px 0">'
+                        '<div style="color:#8f2436;font-weight:700;font-size:13px">⚑ Nephrocalcinosis flag</div>'
+                        f'<div style="font-size:13px;color:#5a2630;line-height:1.55;margin-top:4px">'
+                        f'{html.escape(nephro_flag_note(nf["nfoci"], nf["burden"]))}</div></div>')
+
     # ---- prevention panel ----------------------------------------------
     prev = r["prevention"]
     blocks = ""
@@ -343,6 +360,7 @@ async def drstone_predict(request: Request):
 
 <div class="card">
   <h3>Prevention &amp; patient education</h3>
+  {nephro_alert}
   {cap_alert}
   <div style="font-size:13.5px;color:#3a4858;line-height:1.55">{html.escape(prev["universal"])}</div>
   {flags}

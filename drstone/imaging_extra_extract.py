@@ -41,24 +41,16 @@ VERT_ERODE_MM = 4.0       # trabecular core of the vertebral body
 BMD_LEVELS = ("vertebrae_L1", "vertebrae_L2", "vertebrae_L3")
 
 
-def extract_imaging_extra(series_dir: str) -> dict:
+def compute_nephro(ct, spacing, masks) -> dict:
+    """Nephrocalcinosis (parenchymal calcification load) from precomputed masks."""
     from scipy import ndimage as ndi
-    from drstone.calibration import load_ct
     from drstone.stone_segmentation import (
-        _run_ts, REGION_ROIS, EXCLUDE_ROIS, STONE_HU, REGION_DILATE_MM,
+        REGION_ROIS, EXCLUDE_ROIS, STONE_HU, REGION_DILATE_MM,
         EXCLUDE_DILATE_MM, MIN_STONE_MM3, MAX_STONE_MM3)
-
     out = {"nephrocalc_vol_mm3": np.nan, "nephrocalc_frac": np.nan,
            "nephrocalc_peak_hu": np.nan, "nephrocalc_nfoci": np.nan,
-           "kidney_vol_mm3": np.nan, "bmd_l1_hu": np.nan,
-           "bmd_lumbar_hu": np.nan, "bmd_nlevels": 0}
-    img, ct, spacing = load_ct(series_dir)
+           "kidney_vol_mm3": np.nan}
     voxvol = float(np.prod(spacing)); inplane = max(spacing[1], 0.4)
-    rois = sorted(set(REGION_ROIS + EXCLUDE_ROIS + list(BMD_LEVELS)))
-    with tempfile.TemporaryDirectory() as wd:
-        masks = _run_ts(img, rois, wd)
-    if not masks:
-        return out
 
     def _it(mm):
         return max(1, int(mm / inplane))
@@ -76,7 +68,6 @@ def extract_imaging_extra(series_dir: str) -> dict:
         if r in masks:
             excl |= masks[r]
 
-    # collecting-system stone(s) to remove from the parenchymal ROI
     stone = np.zeros(ct.shape, bool)
     if region.any():
         region_d = ndi.binary_dilation(region, iterations=_it(REGION_DILATE_MM))
@@ -87,7 +78,6 @@ def extract_imaging_extra(series_dir: str) -> dict:
             if MIN_STONE_MM3 <= comp.sum() * voxvol <= MAX_STONE_MM3:
                 stone |= comp
 
-    # nephrocalcinosis within eroded parenchyma, minus stone & bone/vessel
     if kid.any():
         roi = ndi.binary_erosion(kid, iterations=_it(KID_ERODE_MM))
         if stone.any():
@@ -96,8 +86,7 @@ def extract_imaging_extra(series_dir: str) -> dict:
             roi &= ~ndi.binary_dilation(excl, iterations=_it(BONE_PAD_MM))
         nvox = int(roi.sum())
         if nvox > 0:
-            # keep only small scattered foci (nephrocalcinosis); large contiguous
-            # components are stone bleed-through and are dropped.
+            # keep only small scattered foci; large contiguous = stone bleed-through
             lab_c, ncomp = ndi.label(roi & (ct > CALC_HU))
             small = np.zeros(ct.shape, bool); nfoci = 0
             for i in range(1, ncomp + 1):
@@ -109,13 +98,19 @@ def extract_imaging_extra(series_dir: str) -> dict:
             out["nephrocalc_frac"] = float(small.sum() / nvox)
             out["nephrocalc_peak_hu"] = float(ct[small].max()) if small.any() else 0.0
             out["nephrocalc_nfoci"] = int(nfoci)
+    return out
 
-    # opportunistic BMD: trabecular-core median HU of L1 (+ L2/L3)
+
+def compute_bmd(ct, spacing, masks) -> dict:
+    """Opportunistic trabecular-core BMD (median HU) of L1 (+ L2/L3)."""
+    from scipy import ndimage as ndi
+    out = {"bmd_l1_hu": np.nan, "bmd_lumbar_hu": np.nan, "bmd_nlevels": 0}
+    inplane = max(spacing[1], 0.4)
     levels = []
     for lv in BMD_LEVELS:
         m = masks.get(lv)
         if m is not None and m.sum() > 50:
-            core = ndi.binary_erosion(m, iterations=_it(VERT_ERODE_MM))
+            core = ndi.binary_erosion(m, iterations=max(1, int(VERT_ERODE_MM / inplane)))
             if core.sum() >= 30:
                 levels.append((lv, float(np.median(ct[core]))))
     by = dict(levels)
@@ -125,6 +120,39 @@ def extract_imaging_extra(series_dir: str) -> dict:
         out["bmd_lumbar_hu"] = float(np.mean([v for _, v in levels]))
         out["bmd_nlevels"] = len(levels)
     return out
+
+
+def _ts_masks(series_dir):
+    from drstone.calibration import load_ct
+    from drstone.stone_segmentation import _run_ts, REGION_ROIS, EXCLUDE_ROIS
+    img, ct, spacing = load_ct(series_dir)
+    rois = sorted(set(REGION_ROIS + EXCLUDE_ROIS + list(BMD_LEVELS)))
+    with tempfile.TemporaryDirectory() as wd:
+        masks = _run_ts(img, rois, wd)
+    return ct, spacing, masks
+
+
+def extract_imaging_extra(series_dir: str) -> dict:
+    out = {"nephrocalc_vol_mm3": np.nan, "nephrocalc_frac": np.nan,
+           "nephrocalc_peak_hu": np.nan, "nephrocalc_nfoci": np.nan,
+           "kidney_vol_mm3": np.nan, "bmd_l1_hu": np.nan,
+           "bmd_lumbar_hu": np.nan, "bmd_nlevels": 0}
+    ct, spacing, masks = _ts_masks(series_dir)
+    if not masks:
+        return out
+    out.update(compute_nephro(ct, spacing, masks))
+    out.update(compute_bmd(ct, spacing, masks))
+    return out
+
+
+def measure_full(series_dir: str, max_stones: int = 6) -> dict:
+    """One TS pass -> stones (for the picker) + nephrocalcinosis (for the flag)."""
+    from drstone.stone_segmentation import stones_from_masks
+    ct, spacing, masks = _ts_masks(series_dir)
+    if not masks:
+        return {"stones": [], "nephrocalc": {}}
+    return {"stones": stones_from_masks(ct, spacing, masks, max_stones),
+            "nephrocalc": compute_nephro(ct, spacing, masks)}
 
 
 # --------------------------------------------------------------------------

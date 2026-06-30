@@ -57,6 +57,24 @@ def _load_compose():
 
 _CAOX_CAP = False  # False = not loaded yet, None = unavailable, dict = loaded
 CAP_ALERT_MIN_MASS = 0.34  # only screen for CaP when calcium is a real contender
+# Substantial nephrocalcinosis (auto-measured) flags the CaP/dRTA work-up. This
+# is a deterministic radiologic FLAG, not a model feature — it did not survive
+# verification as a learned input (outlier-driven), but heavy parenchymal
+# calcification is a real, actionable finding. Conservative foci threshold so the
+# common 1-4 incidental punctate foci do not fire it.
+NEPHRO_FLAG_FOCI = 5
+
+
+def _nephro_flag(form: dict):
+    """Deterministic nephrocalcinosis flag from auto-measured foci count."""
+    nfoci = _num(form.get("nephrocalc_nfoci"))
+    if isinstance(nfoci, float) and (np.isnan(nfoci) or nfoci < NEPHRO_FLAG_FOCI):
+        return None
+    nfoci = int(nfoci)
+    burden = "marked" if nfoci >= 10 else "moderate"
+    vol = _num(form.get("nephrocalc_vol_mm3"))
+    return {"present": True, "nfoci": nfoci, "burden": burden,
+            "vol_mm3": (None if (isinstance(vol, float) and np.isnan(vol)) else vol)}
 
 
 def _load_caox_cap_head():
@@ -140,6 +158,7 @@ def compose_assess(form: dict) -> dict:
             "calcium_refined": bool(calcium),
             "calcium_head": calcium,
             "cap_screen": (calcium if (calcium and calcium.get("cap_screen_positive")) else None),
+            "nephro_flag": _nephro_flag(form),
             "n_provided": int(sum(1 for v in vals.values()
                                   if not (isinstance(v, float) and np.isnan(v))))}
 

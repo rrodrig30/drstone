@@ -170,6 +170,16 @@ def cap_screen_note(target_sens=None) -> str:
             "— it raises urine pH and can worsen calcium-phosphate stones.")
 
 
+def nephro_flag_note(nfoci, burden) -> str:
+    """DRAFT alert text for substantial auto-detected nephrocalcinosis."""
+    return (f"{burden.capitalize()} nephrocalcinosis on CT ({nfoci} parenchymal "
+            "calcific foci). Parenchymal calcification favors calcium-phosphate "
+            "stone disease and points to a metabolic cause: evaluate for distal "
+            "renal tubular acidosis, primary hyperparathyroidism, and medullary "
+            "sponge kidney (serum calcium/PTH, urine pH, 24-hour urine). A "
+            "radiologic flag, not a model output; confirm on image review.")
+
+
 def metabolic_flags(labs: dict) -> list:
     """Notable spot-lab patterns (with the caveat that 24-h urine is definitive)."""
     f = []

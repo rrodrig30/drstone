@@ -27,8 +27,8 @@ def main():
         # Send all segmentation/TS noise to stderr; keep stdout for JSON only.
         with contextlib.redirect_stdout(sys.stderr):
             if list_all:
-                from drstone.stone_segmentation import list_stones
-                res = {"stones": list_stones(path)}
+                from drstone.imaging_extra_extract import measure_full
+                res = measure_full(path)
             else:
                 from drstone.stone_segmentation import segment_stone
                 res = segment_stone(path)
