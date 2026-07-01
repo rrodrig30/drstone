@@ -1,4 +1,4 @@
-# Predicting Uric‑Acid Kidney Stones from Routine Non‑Contrast CT and Emergency‑Department Labs
+# Kidney‑Stone Composition Prediction from Single‑Energy CT and Routine Emergency‑Department Laboratory Data: Reliable Uric‑Acid Exclusion and the Limits of Calcium‑Subtype Discrimination
 
 ## Abstract
 
