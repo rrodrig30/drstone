@@ -6,7 +6,7 @@ The clinically actionable question in single-energy non-contrast CT (NCCT) stone
 
 This supplement reports, in one place, **every feature family we tested** — the hypothesis and mechanistic rationale that motivated each, the extraction/derivation method, the evaluation, the result, and the disposition — with the successes grouped alongside the failures. Negative results are reported deliberately and in full: publishing only positive findings leaves others to repeatedly expend resources on avenues that do not bear fruit. Our aim is to delineate the boundary of what single-energy NCCT plus routinely available data can and cannot resolve, so that subsequent work is directed at the informative gaps (Section S4).
 
-Unless stated otherwise, evaluation is **repeated stratified patient-grouped 5-fold cross-validation** with **patient-clustered bootstrap 95% CIs**; the calcium-subtype tests use a dedicated CaOx-vs-CaP binary head (positive class = CaP) with the deltas expressed against the **HU + routine-labs** baseline (AUROC 0.710). Cohort: 319 laboratory-analyzed stones from 223 patients (CaOx 107, CaP 144, UA 36, struvite 27, other 5).
+Unless stated otherwise, evaluation is **repeated stratified patient-grouped 5-fold cross-validation** with **patient-clustered bootstrap 95% CIs**; the calcium-subtype tests use a dedicated CaOx-vs-CaP binary head (positive class = CaP) with the deltas expressed against the **HU + routine-labs** baseline (AUROC 0.710). Cohort: 319 laboratory-analyzed stones from 223 patients (CaOx 107, CaP 144, UA 36, struvite 27, other 5). The ledger spans two endpoints — **composition** (which stone type; Table S1) and **multicomponent detection** (whether a stone is mixed at all; Table S2, §S5).
 
 ## S2. Master ledger (Table S1)
 
