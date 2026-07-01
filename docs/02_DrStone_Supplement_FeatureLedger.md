@@ -52,11 +52,46 @@ Three recurring findings organize the ledger:
 
 3. **The information boundary.** Across thirteen rejected families spanning HU fidelity, mineral-metabolism surrogates, systemic-metabolic surrogates, and derived chemistry, single-energy composition prediction is **saturated by stone attenuation and urine/acid–base chemistry**. The residual CaOx-vs-CaP ceiling (~0.71) is not a modeling limitation to be engineered away with additional CT-derived or routine-lab features; it reflects the absence of the **stone-specific analytes** that define the two supersaturation states — most directly **urinary oxalate** (the swing driver of CaOx supersaturation) and its modifiers (magnesium, citrate), which are not present in routine data and are not inferable from single-energy attenuation.
 
-## S5. Figures
+## S5. A second endpoint — multicomponent detection (an exhaustive negative)
+
+Recasting the problem around management decisions (main text §3.7) raises a distinct, coarser question grounded in stone pathophysiology: most stones are **multicomponent** (68% here), laminating a nidus with a shell of different composition — so **can any routine‑data channel detect *that a stone is mixed*, without resolving what it is mixed of?** This is a lower bar than composition subtyping (heterogeneity, not identity) with better‑balanced classes, and it was tested exhaustively. Every feature family of the study — plus a dedicated **peak‑deconvolution** family added for this question (per‑stone 1‑ vs 2‑Gaussian mixture fits: peak separation, Sarle's bimodality coefficient, skewness, and the 2‑vs‑1 BIC evidence) — was evaluated against the multicomponent label under the same patient‑grouped CV with clustered bootstrap.
+
+**Table S2. Multicomponent detection by channel** (multicomponent = second‑component fraction ≥ 10%; AUROC, patient‑clustered bootstrap 95% CI; Figure S4).
+
+| Channel | n feat | AUROC (95% CI) | Verdict |
+|---------|-------:|----------------|---------|
+| Stone HU (base) | 5 | 0.552 (0.480–0.625) | null |
+| HU‑shape radiomics | 10 | 0.553 (0.482–0.619) | null |
+| Density gradient | 1 | 0.426 (0.353–0.496) | below chance |
+| Hb‑calibrated HU | 3 | 0.422 (0.356–0.491) | below chance |
+| CNN deep features | 64 | 0.480 (0.413–0.545) | null |
+| Labs / urine | 10 | 0.484 (0.415–0.549) | null |
+| Derived acid–base + eGFR | 3 | 0.433 (0.360–0.507) | null |
+| Demographics | 2 | 0.435 (0.367–0.504) | null |
+| Nephrocalcinosis | 4 | 0.357 (0.290–0.428) | below chance |
+| Vertebral BMD | 2 | 0.459 (0.390–0.527) | null |
+| Hepatic steatosis | 3 | 0.569 (0.488–0.649) | null |
+| Sarcopenia | 2 | 0.481 (0.407–0.559) | null |
+| Aortic calcification | 3 | 0.427 (0.360–0.494) | below chance |
+| Bladder / prostate | 3 | 0.414 (0.345–0.485) | below chance |
+| **Peak deconvolution** | 5 | 0.527 (0.455–0.598) | null (0.375 at ≥25%) |
+| **All combined** | 115 | 0.626 (0.557–0.695) | **UA‑purity confound** |
+
+**No channel detects multicomponent structure.** Every individual family's interval crosses chance, several below it. The single apparent gain — the 115‑feature combined model at **0.626 (0.557–0.695)** — is a **uric‑acid‑purity confound**, not multicomponent detection: uric‑acid stones are **39% multicomponent vs. 72% for non‑UA**, so predicting "mixed" is largely predicting "not‑UA," which the model already does (Node A). Two orthogonal controls expose it: restricting to calcium stones (removing the UA axis) drops the combined model to **0.549 (non‑significant)**, and a clean ≥25% mixedness threshold drops it to **0.491 (chance)**.
+
+**Peak deconvolution** — the most direct attempt, actively fitting two overlapping Gaussians and measuring their separation and skewness (two unequal overlapping peaks sum to a skewed composite) — was itself at chance (0.53, size‑robust set excluding the voxel‑count‑confounded BIC), *below* chance at the clean threshold (0.375), added nothing to the HU‑shape moments (0.526→0.541), and was matched by a **stone‑volume‑only baseline** — what little varied was stone size, not bimodality. At clinical slice thickness (≈3 mm) partial‑volume averaging erases the two‑peak structure. The lamination is histologically real but not resolvable on single‑energy clinical CT: **the multicomponent architecture that characterizes most stones is undetectable by any channel a standard ED visit provides** — a reinforcement, at a coarser and better‑powered endpoint, of the composition‑subtyping boundary in Table S1.
+
+## S6. Figures
 
 [[FIGURE: FigS1_forest.png]]
 **Figure S1.** Forest plot of ΔAUROC for each feature family added to the HU+labs CaOx-vs-CaP head (patient-clustered bootstrap 95% CI). All intervals cross zero; the only genuine improvement was adding the routine metabolic panel to stone HU (baseline, AUROC 0.710). Grey = rejected; orange = apparent gain traced to a confound/leak (bladder/prostate = sex proxy); blue = retained as a radiologic flag (nephrocalcinosis).
 
 [[FIGURE: FigS2_confusion.png]]
 **Figure S2.** Five-class composition confusion matrix (row-normalized), patient-level cross-validation.
+
+[[FIGURE: FigS3_decision_nodes.png]]
+**Figure S3.** Decision-node performance (left) and the multicomponent threshold sweep (right). Routine data resolves the dissolvable decision (Node A, uric acid vs. non-UA) and a modest calcium-phosphate metabolic flag (Node C2), but multicomponent detection (Node C1) sits at chance and falls below it as the mixedness definition tightens.
+
+[[FIGURE: FigS4_multicomponent.png]]
+**Figure S4.** Exhaustive multicomponent detection — every feature family plus peak deconvolution against the single- vs. multi-component endpoint (thr 0.10; patient-clustered bootstrap 95% CI). All families cross or sit below chance; the lone combined "gain" (orange) is a uric-acid-purity confound (see Table S2).
 - Main-text figures cross-referenced: Fig 1 UA ROC; Fig 2 decision-curve; Fig 3 calibration; Fig 4 UA SHAP; Fig 5 density-gradient per-class AUC; Fig 6 CaOx-vs-CaP head ROC by feature set; Fig 7 CaP-screen operating point.
