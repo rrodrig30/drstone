@@ -21,3 +21,6 @@ venv/
 # Misc
 *.log
 .DS_Store
+
+# Archived pre-extraction Dr Stone material moved out of the PRISM repo (PHI + stale)
+_prism_origin/
