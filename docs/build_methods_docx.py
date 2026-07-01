@@ -13,10 +13,15 @@ import re
 from docx import Document
 from docx.shared import Inches, Pt
 
+import sys
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-MD = os.path.join(HERE, "01_DrStone_Methods.md")
-DOCX = os.path.join(HERE, "01_DrStone_Methods.docx")
+_STEM = sys.argv[1] if len(sys.argv) > 1 else "01_DrStone_Methods"
+MD = os.path.join(HERE, _STEM + ".md")
+DOCX = os.path.join(HERE, _STEM + ".docx")
 FIGS = os.path.join(HERE, "figures")
+
+_MDTABLE = re.compile(r"^\s*\|.*\|\s*$")
 
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 _FIG = re.compile(r"\[\[FIGURE:\s*(.+?)\s*\]\]")
@@ -40,9 +45,33 @@ def main():
     with open(MD, encoding="utf-8") as f:
         lines = f.read().splitlines()
 
-    for raw in lines:
-        line = raw.rstrip()
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+        i += 1
         if not line.strip():
+            continue
+        # ---- markdown table block ----
+        if _MDTABLE.match(line):
+            block = [line]
+            while i < len(lines) and _MDTABLE.match(lines[i]):
+                block.append(lines[i].rstrip()); i += 1
+
+            def cells(row):
+                return [c.strip() for c in row.strip().strip("|").split("|")]
+            rows = [cells(r) for r in block
+                    if not set(r.replace("|", "").strip()) <= set("-: ")]
+            if rows:
+                t = doc.add_table(rows=len(rows), cols=len(rows[0]))
+                t.style = "Light Grid Accent 1"
+                for ri, r in enumerate(rows):
+                    for ci, txt in enumerate(r[:len(rows[0])]):
+                        cell = t.rows[ri].cells[ci]
+                        cell.paragraphs[0].text = ""
+                        run = cell.paragraphs[0].add_run(_BOLD.sub(r"\1", txt))
+                        if ri == 0 or txt.startswith("**"):
+                            run.bold = True
+                        run.font.size = Pt(8)
             continue
         fig = _FIG.match(line.strip())
         if fig:
